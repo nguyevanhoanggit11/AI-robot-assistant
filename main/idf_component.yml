@@ -4,7 +4,7 @@ dependencies:
 
   espressif/es8311: "^1.0"
   
-  # LVGL port (Đã gộp lại và dùng 1 phiên bản)
+ 
   espressif/esp_lvgl_port:
     version: ">=2.5.0"
   

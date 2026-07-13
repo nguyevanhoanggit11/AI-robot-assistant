@@ -143,8 +143,8 @@ void face_eyes_blink(void)
         lv_anim_init(&a1);
         lv_anim_set_var(&a1, s_left_grp);
         lv_anim_set_values(&a1, base_y, base_y - jitter);
-        lv_anim_set_time(&a1, 15);
-        lv_anim_set_playback_time(&a1, 15);
+        lv_anim_set_time(&a1, 5);
+        lv_anim_set_playback_time(&a1, 5);
         lv_anim_set_path_cb(&a1, lv_anim_path_ease_in_out);
         lv_anim_set_exec_cb(&a1, anim_set_y_cb);
         lv_anim_start(&a1);
@@ -153,8 +153,8 @@ void face_eyes_blink(void)
         lv_anim_init(&a2);
         lv_anim_set_var(&a2, s_right_grp);
         lv_anim_set_values(&a2, base_y, base_y - jitter);
-        lv_anim_set_time(&a2, 15);
-        lv_anim_set_playback_time(&a2, 15);
+        lv_anim_set_time(&a2, 5);
+        lv_anim_set_playback_time(&a2, 5);
         lv_anim_set_path_cb(&a2, lv_anim_path_ease_in_out);
         lv_anim_set_exec_cb(&a2, anim_set_y_cb);
         lv_anim_set_ready_cb(&a2, blink_ready_cb);
@@ -275,7 +275,7 @@ lv_obj_t *mask = lv_obj_create(grp);
     
     // Đặt kích thước ban đầu là hình vuông để bo tròn thành hình tròn
     lv_obj_set_size(mask, eye_d + 10, eye_d + 10); 
-    lv_obj_set_style_radius(mask, LV_RADIUS_CIRCLE, 0); // Thêm dòng này
+    lv_obj_set_style_radius(mask, LV_RADIUS_CIRCLE, 0);
     
     lv_obj_set_style_bg_color(mask, lv_color_hex(FACE_BG_COLOR_HEX), 0);
     lv_obj_set_style_bg_opa(mask, LV_OPA_COVER, 0);
@@ -309,7 +309,7 @@ void face_eyes_create(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_qmark, lv_color_hex(0x00FF88), 0);
     lv_obj_set_style_opa(s_qmark, LV_OPA_TRANSP, 0);
     lv_label_set_text(s_qmark, "?");
-    lv_obj_align_to(s_qmark, s_right_grp, LV_ALIGN_OUT_TOP_RIGHT, 4, 4);
+    lv_obj_align_to(s_qmark, s_right_grp, LV_ALIGN_OUT_TOP_RIGHT, 8, 8);
 
     s_current_emotion = FACE_NORMAL;
     s_blinking = false;

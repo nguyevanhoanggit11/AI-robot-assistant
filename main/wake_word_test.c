@@ -53,7 +53,7 @@ static const char *TAG = "WAKE_WORD";
 // =======================
 // WEBSOCKET CONFIG
 // =======================
-#define WEBSOCKET_URI   "ws://192.168.2.214:8765"
+#define WEBSOCKET_URI   "ws://192.168.2.216:8765"
 #define WS_TIMEOUT_MS   5000
 static EventGroupHandle_t sys_event_group = NULL;
 typedef enum {
@@ -63,6 +63,8 @@ typedef enum {
 } system_state_t;
 
 volatile system_state_t sys_state = STATE_IDLE;
+
+volatile bool force_record_flag = false;   // <-- MỚI: cờ giả lập wake word từ bàn phím
 
 // =======================
 // GLOBAL VARIABLES
@@ -354,6 +356,8 @@ void i2s_init(void)
     ESP_ERROR_CHECK(es8311_init(es_handle, &es_clk, ES8311_RESOLUTION_16, ES8311_RESOLUTION_16));
     ESP_ERROR_CHECK(es8311_sample_frequency_config(es_handle, EXAMPLE_SAMPLE_RATE * EXAMPLE_MCLK_MULTIPLE, EXAMPLE_SAMPLE_RATE));
     ESP_ERROR_CHECK(es8311_microphone_config(es_handle, false));
+    // sau dòng es8311_microphone_config(es_handle, false);
+    ESP_ERROR_CHECK(es8311_microphone_gain_set(es_handle, ES8311_MIC_GAIN_30DB));
     ESP_ERROR_CHECK(es8311_voice_volume_set(es_handle, 70, NULL));   // <-- thêm dòng này: bật DAC + set volume 70/100
 
     ESP_LOGI(TAG, "I2S full-duplex + ES8311 OK");
@@ -481,9 +485,15 @@ void detect_task(void *arg)
 
         if (sys_state == STATE_IDLE)
         {
-            if (res->wakeup_state == WAKENET_DETECTED)
+            if (res->wakeup_state == WAKENET_DETECTED || force_record_flag)
             {
-                ESP_LOGI(TAG, "Wake word! Bắt đầu ghi âm...");
+                if (force_record_flag) {
+                    ESP_LOGI(TAG, "Test mode: Bỏ qua wake word! Bắt đầu ghi âm...");
+                    force_record_flag = false;   // reset cờ ngay sau khi dùng
+                } else {
+                    ESP_LOGI(TAG, "Wake word! Bắt đầu ghi âm...");
+                }
+
                 silence_count    = 0;
                 recording_frames = 0;
 
@@ -567,6 +577,23 @@ void send_task(void *arg)
     }
 }
 
+void keyboard_task(void *arg)
+{
+    ESP_LOGI(TAG, "Test mode: Nhấn phím 's' (và Enter) trên Serial Monitor để giả lập wake word.");
+    while (1) {
+        int c = fgetc(stdin);
+        if (c == 's' || c == 'S') {
+            if (sys_state == STATE_IDLE) {
+                force_record_flag = true;
+            } else {
+                ESP_LOGW(TAG, "Hệ thống đang bận (%d), không thể trigger lúc này.", sys_state);
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
+
+
 // =======================
 // MAIN
 // =======================
@@ -632,6 +659,7 @@ void app_main(void)
     xTaskCreatePinnedToCore(detect_task, "detect_task", 4096*4, NULL, 6, NULL, 0);
     xTaskCreatePinnedToCore(send_task,   "send",   4096*3, NULL, 4, NULL, 1);
     xTaskCreatePinnedToCore(play_task, "play_task", 4096*3, NULL, 4, NULL, 1);
+    xTaskCreatePinnedToCore(keyboard_task, "keyboard_task", 4096, NULL, 3, NULL, 1);
 
     ESP_LOGI(TAG, "Hệ thống sẵn sàng. Chờ wake word...");
 }
