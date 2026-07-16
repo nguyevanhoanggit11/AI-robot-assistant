@@ -53,7 +53,7 @@ static const char *TAG = "WAKE_WORD";
 // =======================
 // WEBSOCKET CONFIG
 // =======================
-#define WEBSOCKET_URI   "ws://192.168.2.216:8765"
+#define WEBSOCKET_URI   "ws://192.168.2.45:8765"
 #define WS_TIMEOUT_MS   5000
 static EventGroupHandle_t sys_event_group = NULL;
 typedef enum {
@@ -358,7 +358,7 @@ void i2s_init(void)
     ESP_ERROR_CHECK(es8311_microphone_config(es_handle, false));
     // sau dòng es8311_microphone_config(es_handle, false);
     ESP_ERROR_CHECK(es8311_microphone_gain_set(es_handle, ES8311_MIC_GAIN_30DB));
-    ESP_ERROR_CHECK(es8311_voice_volume_set(es_handle, 70, NULL));   // <-- thêm dòng này: bật DAC + set volume 70/100
+    ESP_ERROR_CHECK(es8311_voice_volume_set(es_handle,75, NULL));   
 
     ESP_LOGI(TAG, "I2S full-duplex + ES8311 OK");
 }
