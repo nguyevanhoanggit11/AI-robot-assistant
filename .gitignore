@@ -1,10 +1,8 @@
-# Cấu hình bỏ qua cho ESP-IDF
 build/
 managed_components/
 build_log
 sdkconfig.old
 sdkconfig.backup
 
-# Bỏ qua cấu hình riêng của VS Code nếu muốn (tùy chọn)
 .vscode/
 .clangd/

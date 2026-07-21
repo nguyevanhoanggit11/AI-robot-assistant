@@ -1,6 +1,6 @@
 #pragma once
 
-// Khởi tạo màn hình ST7789 + LVGL
+// Khởi tạo màn hình
 void display_init(void);
 
 // Cập nhật sau khi nhận JSON từ server

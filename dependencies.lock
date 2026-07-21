@@ -34,7 +34,7 @@ dependencies:
       type: service
     version: 0.5.3
   espressif/dl_fft:
-    component_hash: 2f319e72f3ab6f673c83849d6a14b68c21165d4dce24e12af7c13714ba35a6e0
+    component_hash: a955ca29581de2177ddf25759273bd83f082b3c805e735fe6ee105858643989b
     dependencies:
     - name: idf
       require: private
@@ -42,7 +42,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 0.5.0
+    version: 0.6.0
   espressif/eppp_link:
     component_hash: 04f7f31868b8ae6014c96132740a192d09611a6e46aaa7038c865ffc7e26b38f
     dependencies:
@@ -345,6 +345,13 @@ dependencies:
       registry_url: https://components.espressif.com
       type: service
     version: 9.4.0
+  trombik/esp_wireguard:
+    component_hash: 06b514516c241f27493b7589d3d4a79f424713609891168e4e65f529f1980922
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.9.0
 direct_dependencies:
 - espressif/eppp_link
 - espressif/es8311
@@ -355,6 +362,7 @@ direct_dependencies:
 - espressif/esp_websocket_client
 - espressif/esp_wifi_remote
 - idf
-manifest_hash: e46689d7398764683abdea45fd7ad2beb369f8e40ab7d6e3b05d6ce4d16cc48b
+- trombik/esp_wireguard
+manifest_hash: f7690e2a83e3fa388cfdf05b0ca15bbb4ea356d212e15c05d43d041508dd8a14
 target: esp32p4
 version: 2.0.0
