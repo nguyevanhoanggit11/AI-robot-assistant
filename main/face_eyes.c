@@ -294,7 +294,7 @@ void face_eyes_create(lv_obj_t *parent)
     s_face_cont = lv_obj_create(parent);
     lv_obj_remove_style_all(s_face_cont);
     lv_obj_set_size(s_face_cont, 300, 180);
-    lv_obj_align(s_face_cont, LV_ALIGN_CENTER, -100, -60);
+    lv_obj_align(s_face_cont, LV_ALIGN_CENTER, 0, -40);
     lv_obj_remove_flag(s_face_cont, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_bg_opa(s_face_cont, LV_OPA_TRANSP, 0);
 

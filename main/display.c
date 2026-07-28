@@ -29,8 +29,10 @@ static const char *TAG = "DISPLAY";
 #define LCD_V_RES              480
 #define LCD_DPI_CLK_MHZ        26
 #define LCD_HSW                1
-#define LCD_HBP                46
-#define LCD_HFP                210
+// --- ĐÃ SỬA: Điều chỉnh Timings phần cứng để căn giữa màn hình ---
+#define LCD_HBP                26   // Giảm từ 46 xuống 26 để dịch màn hình sang trái
+#define LCD_HFP                230  // Tăng từ 210 lên 230 để giữ nguyên H_Total
+// -----------------------------------------------------------------
 #define LCD_VSW                3
 #define LCD_VBP                29
 #define LCD_VFP                13
@@ -90,19 +92,15 @@ typedef struct {
 } lcd_dsi_bus_access_t;
 
 static esp_lcd_panel_handle_t s_panel;
-//static i2c_master_bus_handle_t s_i2c_bus;
-//static i2c_master_dev_handle_t s_pmic;
 static bool s_pmic_power_on;
 static lv_display_t *lvgl_display = NULL;
 static bool s_i2c_initialized = false;
-static bool s_pmic_power_on;
 
 // =======================
 // LVGL UI Objects
 // =======================
 static lv_obj_t *ui_speech_label = NULL;
 static lv_obj_t *ui_state_label  = NULL;
-// Mắt procedural (2 hình bo tròn animate) được quản lý trong face_eyes.c
 
 // =======================
 // PMIC (ATTINY) - cấp nguồn LCD + điều khiển backlight
@@ -268,7 +266,7 @@ static esp_err_t lcd_dsi_latch_lp_gen_writes(esp_lcd_dsi_bus_handle_t bus)
 }
 
 // =======================
-// Khởi tạo phần cứng LCD (DSI bus + panel DPI + PMIC + bridge)
+// Khởi tạo phần cứng LCD
 // =======================
 static esp_err_t lcd_hw_init(void)
 {
@@ -333,14 +331,16 @@ static esp_err_t lcd_hw_init(void)
 }
 
 // =======================
-// DISPLAY INIT (giữ nguyên tên hàm cho wake_word_test.c gọi)
+// DISPLAY INIT
 // =======================
 LV_FONT_DECLARE(font_vietnamese_14);
 void display_init(void)
 {
     ESP_LOGI(TAG, "Khởi tạo màn hình Waveshare 4.3\" DSI...");
 
-    const esp_lv_adapter_config_t lv_cfg = ESP_LV_ADAPTER_DEFAULT_CONFIG();
+    // --- ĐÃ SỬA: Ghim tác vụ vẽ LVGL vào Core 0 ---
+    esp_lv_adapter_config_t lv_cfg = ESP_LV_ADAPTER_DEFAULT_CONFIG();
+    //lv_cfg.task_affinity = 0; // Cực kỳ quan trọng để chống xung đột với âm thanh ở Core 1
     ESP_ERROR_CHECK(esp_lv_adapter_init(&lv_cfg));
 
     ESP_ERROR_CHECK(lcd_hw_init());
@@ -367,7 +367,8 @@ void display_init(void)
         return;
     }
     lv_display_set_physical_resolution(lvgl_display, LCD_H_RES, LCD_V_RES);
-    lv_display_set_offset(lvgl_display, -100, 0);
+    
+    lv_display_set_offset(lvgl_display, -400, 0);
 
     ESP_ERROR_CHECK(esp_lv_adapter_start());
 
@@ -378,44 +379,44 @@ void display_init(void)
     lv_obj_set_pos(screen, 0, 0);
     lv_obj_set_size(screen, LCD_H_RES, LCD_V_RES);
     lv_obj_set_style_pad_all(screen, 0, 0);
-    lv_obj_set_style_bg_color(screen, lv_color_hex(0x1A1A2E), LV_PART_MAIN); // Vẫn giữ màu nền xanh đen để lấp khoảng trống
+    lv_obj_set_style_bg_color(screen, lv_color_hex(0x1A1A2E), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 
-   // --- GIẢI PHÁP: TẠO MASTER CONTAINER GIỮ NGUYÊN TỌA ĐỘ GỐC ---
+    // MASTER CONTAINER1
     lv_obj_t *ui_cont = lv_obj_create(screen);
     lv_obj_remove_style_all(ui_cont); 
     lv_obj_set_size(ui_cont, LCD_H_RES, LCD_V_RES); 
     lv_obj_remove_flag(ui_cont, LV_OBJ_FLAG_SCROLLABLE);
-    // Giữ ở tâm (0,0), không dùng offset âm ở đây để tránh lỗi clip toàn bộ container
-    lv_obj_align(ui_cont, LV_ALIGN_CENTER, 0, 0); 
+    lv_obj_align(ui_cont, LV_ALIGN_CENTER, -100, 0); 
 
-    // ---- DỊCH CHUYỂN TỪNG THÀNH PHẦN CON SANG TRÁI -20 PIXEL ----
-
-    // State label - góc trên (Thêm offset -20 vào trục X)
+    // State label
     ui_state_label = lv_label_create(ui_cont); 
     lv_obj_set_style_text_font(ui_state_label, &lv_font_montserrat_48, LV_PART_MAIN);
     lv_obj_set_style_text_color(ui_state_label, lv_color_hex(0x888888), LV_PART_MAIN);
     lv_label_set_text(ui_state_label, "AI robot assistant");
-    lv_obj_align(ui_state_label, LV_ALIGN_TOP_MID, -100, 20); // Đã đổi 0 thành -20
+    
+    // --- ĐÃ SỬA: Đưa X về 0, giảm Y xuống 5 để không đè lên dấu "?" ---
+    lv_obj_align(ui_state_label, LV_ALIGN_TOP_MID, 0, 5); 
 
-    // Mắt (Cần vào file face_eyes.c sửa hàm face_eyes_create để dịch container của mắt sang -20)
+    // Mắt
     face_eyes_create(ui_cont);
 
-    // Speech label - phía dưới
+    // Speech label 
     ui_speech_label = lv_label_create(ui_cont);
     
-    // GIẢM chiều rộng từ 740 xuống 600 để tạo khoảng trống an toàn 100px hai bên rìa
+    // --- ĐÃ SỬA: Box text giới hạn chu vi + Hiệu ứng tự cuộn (SCROLL) ---
     lv_obj_set_width(ui_speech_label, 600); 
+    lv_obj_set_height(ui_speech_label, 80); // Cố định chiều cao
+    lv_label_set_long_mode(ui_speech_label, LV_LABEL_LONG_SCROLL); 
     
-    lv_label_set_long_mode(ui_speech_label, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(ui_speech_label, &font_vietnamese_14, LV_PART_MAIN);
     lv_obj_set_style_text_color(ui_speech_label, lv_color_hex(0xE0E0E0), LV_PART_MAIN);
     lv_obj_set_style_text_align(ui_speech_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-    lv_label_set_text(ui_speech_label, "xin chào bạn tôi là trợ lý AI robot, tôi có thể giúp gì cho bạn đoạn này viết dài dài dài dài dài dài dài dài dài để test");
+    lv_label_set_text(ui_speech_label, "Xin chào bạn, tôi là trợ lý AI robot, tôi có thể giúp gì cho bạn?");
     
-    // Dịch hộp chữ sang trái -20 pixel theo trục X
-    lv_obj_align(ui_speech_label, LV_ALIGN_CENTER, -100, 100); // Đã đổi 0 thành -20
+    // Đưa X về 0 (vì phần cứng đã tự căn giữa), đẩy Y xuống dưới một chút
+    lv_obj_align(ui_speech_label, LV_ALIGN_CENTER, 0, 120); 
 
     lv_refr_now(lvgl_display);
     esp_lv_adapter_unlock();
@@ -424,7 +425,7 @@ void display_init(void)
 }
 
 // =======================
-// DISPLAY UPDATE - gọi sau khi nhận JSON từ server
+// DISPLAY UPDATE
 // =======================
 void display_update(const char *face, const char *speech)
 {

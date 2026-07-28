@@ -38,7 +38,7 @@ static const char *TAG = "WAKE_WORD";
 #define I2S_MCK_IO      GPIO_NUM_13
 #define I2S_BCK_IO      GPIO_NUM_12
 #define I2S_WS_IO       GPIO_NUM_10
-#define I2S_DO_IO       GPIO_NUM_9   // không dùng ở giai đoạn mic-only, giữ lại cho phần loa sau
+#define I2S_DO_IO       GPIO_NUM_9   
 #define I2S_DI_IO       GPIO_NUM_11
 
 #define EXAMPLE_SAMPLE_RATE     16000
@@ -48,24 +48,24 @@ static const char *TAG = "WAKE_WORD";
 // =======================
 // WIFI CONFIG
 // =======================
-//công ty
-//#define WIFI_SSID       "DevBriX"
-//#define WIFI_PASSWORD   "@DevBriX2026$#"
+// công ty
+// #define WIFI_SSID       "DevBriX"
+// #define WIFI_PASSWORD   "@DevBriX2026$#"
 // hoangwifi
-#define WIFI_SSID       "+++"
-#define WIFI_PASSWORD   "h0916325810"
+ #define WIFI_SSID       "+++"
+ #define WIFI_PASSWORD   "h0916325810"
 // nhà
-//#define WIFI_SSID       "AH2-1009"
-//#define WIFI_PASSWORD   "nhincaichogi"
+// #define WIFI_SSID       "AH2-1009"
+// #define WIFI_PASSWORD   "nhincaichogi"
 #define EXAMPLE_ESP_MAXIMUM_RETRY 5
 
 // =======================
 // WEBSOCKET CONFIG
 // =======================
 //công ty 
-//#define WEBSOCKET_URI   "ws://192.168.2.45:8765" 
+// #define WEBSOCKET_URI   "ws://192.168.2.45:8765" 
 // nhà
-#define WEBSOCKET_URI   "ws://10.10.10.1:8765"
+ #define WEBSOCKET_URI   "ws://10.10.10.1:8765"
 #define WS_TIMEOUT_MS   5000
 static EventGroupHandle_t sys_event_group = NULL;
 typedef enum {
@@ -86,12 +86,15 @@ static EventGroupHandle_t wifi_event_group;
 #define WIFI_FAIL_BIT      BIT1
 
 i2s_chan_handle_t rx_chan           = NULL;
-i2s_chan_handle_t tx_chan = NULL;              // thêm dòng này, cạnh rx_chan
+i2s_chan_handle_t tx_chan = NULL;              
 RingbufHandle_t   playback_ringbuf = NULL;     // buffer chứa PCM chờ phát ra loa
 static bool       receiving_audio = false;     // đánh dấu đang nhận 1 frame binary audio
 static volatile bool new_stream_pending = false;   // đánh dấu vừa bắt đầu 1 đoạn audio mới, cần đệm lại trước khi phát
+static bool       in_audio_stream = false; 
+static volatile bool speaker_busy = false;   // true khi loa đang/sắp phát audio -> tạm dừng AFE feed, nhường CPU core 0 cho play_task
 
-#define PLAYBACK_PRIME_BYTES   12800   // ~400ms audio ở 16kHz, mono, 16-bit (16000 mau/giay * 2 byte/mau * 0.4 giay)
+
+#define PLAYBACK_PRIME_BYTES   12800// ~400ms audio ở 16kHz, mono, 16-bit (16000 mau/giay * 2 byte/mau * 0.4 giay)
 static es8311_handle_t es_handle    = NULL;
 const esp_afe_sr_iface_t *afe_handle = NULL;
 esp_afe_sr_data_t        *afe_data   = NULL;
@@ -211,73 +214,86 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base,
 {
     esp_websocket_event_data_t *data = (esp_websocket_event_data_t *)event_data;
 
-    if (event_id == WEBSOCKET_EVENT_DATA)
+    // =======================
+// LOG KIỂM TRA NHẬN AUDIO TỪ SERVER
+// =======================
+if (event_id == WEBSOCKET_EVENT_DATA)
+{
+    // 1. Phát hiện gói Binary âm thanh (Opcode 0x02 hoặc 0x00)
+    if (data->op_code == 0x02) {
+        receiving_audio = true;
+        if (!in_audio_stream) {
+            in_audio_stream = true;     
+            new_stream_pending = true;  
+            speaker_busy = true;
+            size_t item_size;
+            void *old_data;
+            while ((old_data = xRingbufferReceive(playback_ringbuf, &item_size, 0)) != NULL) {
+                vRingbufferReturnItem(playback_ringbuf, old_data);
+            }
+            // log thông tin bộ nhớ 
+            ESP_LOGI(TAG, "[HEAP] Internal free: %u | Task stack HWM play_task: %u",
+                     (unsigned int)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                     (unsigned int)uxTaskGetStackHighWaterMark(NULL));
+            // --- LOG 1: BÁO BẮT ĐẦU NHẬN LUỒNG STREAM MỚI ---
+            ESP_LOGI(TAG, "--------------------------------------------------");
+            ESP_LOGI(TAG, "AUDIO STREAM: [START] Bắt đầu nhận luồng âm thanh mới!");
+            ESP_LOGI(TAG, "--------------------------------------------------");
+        }
+    }
+
+   // 2. Nhận các Chunk dữ liệu PCM
+    if (receiving_audio && data->data_len > 0 &&
+        (data->op_code == 0x02 || data->op_code == 0x00))
     {
-        // --- Nhận audio PCM (binary) từ server để phát ra loa ---
-            if (data->op_code == 0x02) {
-            receiving_audio = true;
-            new_stream_pending = true;   // báo cho play_task biết đây là đoạn audio mới, cần chờ đệm trước khi phát
-            }
-        if (receiving_audio && data->data_len > 0 &&
-            (data->op_code == 0x02 || data->op_code == 0x00))
-        {
-                if (playback_ringbuf) {
-                // --- Kiểm tra PCM nhận từ server có bị clip (chạm đỉnh full-scale) không ---
-                int16_t *samples = (int16_t *)data->data_ptr;
-                    int sample_count = data->data_len / sizeof(int16_t);
-                    int clipped_count = 0;
-                    int max_run_length = 0;      // chuỗi liên tiếp dài nhất các mẫu bị ghim ở đỉnh
-                    int current_run_length = 0;  // chuỗi liên tiếp hiện tại đang đếm
-
-                    for (int i = 0; i < sample_count; i++) {
-                        bool is_clipped = (samples[i] >= 32760 || samples[i] <= -32760);
-                        if (is_clipped) {
-                            clipped_count++;
-                            current_run_length++;
-                            if (current_run_length > max_run_length) {
-                                max_run_length = current_run_length;
-                            }
-                        } else {
-                            current_run_length = 0;
-                        }
-                    }
-
-                    // Chỉ cảnh báo khi có chuỗi liên tiếp >= 3 mẫu bị ghim cứng -> dấu hiệu clipping thật sự
-                    // (1-2 mẫu chạm đỉnh đơn lẻ có thể chỉ là đỉnh sóng to bình thường, không phải lỗi)
-                    if (max_run_length >= 3) {
-                        float clipped_percent = 100.0f * clipped_count / sample_count;
-                        ESP_LOGW(TAG, "PCM từ server: %d/%d mẫu cham full-scale (%.1f%%), chuoi lien tiep dai nhat = %d mau",
-                                clipped_count, sample_count, clipped_percent, max_run_length);
-                    }
-                // --- Hết đoạn kiểm tra, phần đẩy vào ringbuf giữ nguyên như cũ ---
-
-                BaseType_t ok = xRingbufferSend(playback_ringbuf, data->data_ptr,
-                                                data->data_len, pdMS_TO_TICKS(10000));
-                if (ok != pdTRUE) {
-                    ESP_LOGE(TAG, "Playback ringbuf TIMEOUT - audio bị drop! (%d bytes)", data->data_len);
-                }
-            }
-
-            if (data->payload_offset + data->data_len >= data->payload_len) {
-                receiving_audio = false;
-                ESP_LOGI(TAG, "Nhận xong audio PCM (%d bytes)", data->payload_len);
-            }
-            return;  // không đi tiếp xuống phần JSON
+        // --- LOG 2: LOG CHI TIẾT MỖI CHUNK AUDIO NHẬN ĐƯỢC ---
+        // Chỉ log định kỳ (mỗi 20 gói) vì ESP_LOGI ghi UART đồng bộ (blocking),
+        // log mỗi gói ở tần suất cao (~8ms/gói) sẽ chặn network task và gây rớt kết nối.
+        static int chunk_log_counter = 0;
+        if (++chunk_log_counter % 20 == 0) {
+            UBaseType_t free_buf_bytes = xRingbufferGetCurFreeSize(playback_ringbuf);
+            ESP_LOGI(TAG, "AUDIO CHUNK: Nhận +%d bytes | Opcode: 0x%02X | Offset: %d/%d | Ringbuf trống: %u bytes",
+                     data->data_len,
+                     data->op_code,
+                     data->payload_offset,
+                     data->payload_len,
+                     (unsigned int)free_buf_bytes);
         }
 
-        // --- Nhận text (JSON kết quả hoặc "AUDIO_END") ---
-        if (data->data_len > 0 && data->op_code == 0x01)
-        {
-            char json_buf[512] = {0};
-            int len = data->data_len < (int)(sizeof(json_buf) - 1)
-                      ? data->data_len : (int)(sizeof(json_buf) - 1);
-            memcpy(json_buf, data->data_ptr, len);
-
-            if (strncmp(json_buf, "AUDIO_END", 9) == 0) {
-                ESP_LOGI(TAG, "Server báo hiệu kết thúc audio.");
-                return;
+        if (playback_ringbuf) {
+            BaseType_t ok = xRingbufferSend(playback_ringbuf, data->data_ptr,
+                                            data->data_len, pdMS_TO_TICKS(1000));
+            if (ok != pdTRUE) {
+                ESP_LOGE(TAG, "AUDIO ERROR: Playback ringbuf FULL! Bị rớt %d bytes audio!", data->data_len);
             }
+        }
+            
+        if (data->payload_offset + data->data_len >= data->payload_len) {
+            receiving_audio = false;
+        }
+        return;
+    }
 
+    // 3. Nhận tín hiệu kết thúc stream từ Server
+    if (data->data_len > 0 && data->op_code == 0x01)
+    {
+        char json_buf[512] = {0};
+        int len = data->data_len < (int)(sizeof(json_buf) - 1)
+                  ? data->data_len : (int)(sizeof(json_buf) - 1);
+        memcpy(json_buf, data->data_ptr, len);
+
+        if (strncmp(json_buf, "AUDIO_END", 9) == 0) {
+            ESP_LOGI(TAG, "--------------------------------------------------");
+            ESP_LOGI(TAG, "AUDIO STREAM: [END] Server báo đã hoàn tất gửi âm thanh!");
+            ESP_LOGI(TAG, "--------------------------------------------------");
+
+            in_audio_stream = false; 
+            new_stream_pending = false; // Hủy chế độ đệm, ép play_task phát nấc dữ liệu cuối cùng
+            sys_state = STATE_IDLE;
+            return;
+        }
+
+            // Nếu không phải AUDIO_END thì xử lý JSON kết quả phản hồi từ Server
             if (sys_state == STATE_WAITING_RESULT)
             {
                 ESP_LOGI(TAG, "JSON: %s", json_buf);
@@ -292,7 +308,7 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base,
                 ESP_LOGI(TAG, "speech='%s' face='%s' motor='%s'", speech, face, motor);
                 display_update(face, speech);
 
-                sys_state = STATE_IDLE;
+                
             }
         }
     }
@@ -301,16 +317,22 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base,
     }
     else if (event_id == WEBSOCKET_EVENT_DISCONNECTED) {
         ESP_LOGW(TAG, "WebSocket mất kết nối.");
+        in_audio_stream = false; // Reset cờ nếu mất kết nối
         if (sys_state != STATE_IDLE) sys_state = STATE_IDLE;
     }
 }
+
 
 void websocket_init(void)
 {
     esp_websocket_client_config_t ws_cfg = {
         .uri                  = WEBSOCKET_URI,
         .reconnect_timeout_ms = WS_TIMEOUT_MS,
-        .buffer_size          = 4096,
+        .buffer_size          = 10*1024,
+        .keep_alive_enable    = true,
+        .keep_alive_idle      = 20,   // sau 20s không có traffic thì bắt đầu gửi probe
+        .keep_alive_interval  = 5,    // lặp lại probe mỗi 5s
+        .keep_alive_count     = 3,    // 3 lần probe thất bại liên tiếp -> coi như mất kết nối
     };
     ws_client = esp_websocket_client_init(&ws_cfg);
     esp_websocket_register_events(ws_client, WEBSOCKET_EVENT_ANY,
@@ -355,12 +377,12 @@ static void pa_enable(void)
 // =======================
 void i2s_init(void)
 {   
-    pa_enable();
+    
     i2c_init();
 
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
     chan_cfg.dma_desc_num  = 16;
-    chan_cfg.dma_frame_num = 1024;
+    chan_cfg.dma_frame_num = 1000;
     chan_cfg.auto_clear    = true;  
     // Tạo cả tx_chan và rx_chan cùng lúc (full-duplex, chung 1 controller)
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &tx_chan, &rx_chan));
@@ -403,7 +425,7 @@ void i2s_init(void)
     // sau dòng es8311_microphone_config(es_handle, false);
     ESP_ERROR_CHECK(es8311_microphone_gain_set(es_handle, ES8311_MIC_GAIN_30DB));
     ESP_ERROR_CHECK(es8311_voice_volume_set(es_handle,80, NULL));   
-
+    pa_enable();
     ESP_LOGI(TAG, "I2S full-duplex + ES8311 OK");
 }
 
@@ -460,8 +482,11 @@ void feed_task(void *arg)
             pcm_buffer[i] = (int16_t)p;
         }
 
-        // Luồng 1: AFE detect
-        afe_handle->feed(afe_data, pcm_buffer);
+        // Luồng 1: AFE detect - tạm dừng khi loa đang phát để nhường CPU core 0 cho play_task
+       if (!speaker_busy) {
+            afe_handle->feed(afe_data, pcm_buffer);
+        }
+
 
         // Luồng 2: raw audio vào ringbuf (không qua AFE processing)
        if (sys_state == STATE_RECORDING && audio_ringbuf != NULL) {
@@ -502,7 +527,7 @@ void play_task(void *arg)
         // --- Trạng thái đệm: chờ ringbuf tích đủ PLAYBACK_PRIME_BYTES rồi mới phát ---
         if (priming) {
             UBaseType_t free_size = xRingbufferGetCurFreeSize(playback_ringbuf);
-            UBaseType_t used_size = (128 * 1024) - free_size;   // 128*1024 = kich thuoc playback_ringbuf, khai bao trong app_main
+            UBaseType_t used_size = (48 * 1024) - free_size;   // 128*1024 = kich thuoc playback_ringbuf, khai bao trong app_main
 
             if (used_size >= PLAYBACK_PRIME_BYTES) {
                 priming = false;
@@ -515,11 +540,19 @@ void play_task(void *arg)
 
         size_t item_size;
         int16_t *mono = (int16_t *)xRingbufferReceiveUpTo(
-            playback_ringbuf, &item_size, pdMS_TO_TICKS(200),
+            playback_ringbuf, &item_size, pdMS_TO_TICKS(50),
             chunk_samples * sizeof(int16_t));
 
-        if (mono == NULL) continue;  // chưa có audio, chờ tiếp
-
+        if (mono == NULL) {
+        if (!in_audio_stream && !new_stream_pending) {
+            speaker_busy = false;   // ringbuffer cạn + server không còn gửi thêm -> loa đã phát xong thật sự
+        }
+        memset(stereo_buf, 0, chunk_samples * 2 * sizeof(int16_t));
+        size_t bytes_written;
+        i2s_channel_write(tx_chan, stereo_buf, chunk_samples * 2 * sizeof(int16_t),
+                       &bytes_written, pdMS_TO_TICKS(20));
+        continue;  // chưa có audio, chờ tiếp
+        }
         int samples = item_size / sizeof(int16_t);
         for (int i = 0; i < samples; i++) {
             stereo_buf[i * 2]     = mono[i];  // loa mono -> lặp ra cả 2 kênh
@@ -542,11 +575,17 @@ void detect_task(void *arg)
 {
     int silence_count    = 0;
     int recording_frames = 0;
+    bool send_triggered  = false;
     const int MAX_SILENCE_FRAMES   = 100;
     const int MAX_RECORDING_FRAMES = 200;
 
     while (1)
     {
+        if (speaker_busy) {
+            vTaskDelay(pdMS_TO_TICKS(50));   // loa đang phát -> không gọi fetch(), nhường CPU thật cho các task khác
+            continue;
+        }
+
         afe_fetch_result_t *res = afe_handle->fetch(afe_data);
         if (res == NULL) continue;
 
@@ -563,6 +602,7 @@ void detect_task(void *arg)
 
                 silence_count    = 0;
                 recording_frames = 0;
+                send_triggered   = false;
 
                 size_t item_size;
                 void  *old_data;
@@ -589,8 +629,10 @@ void detect_task(void *arg)
             bool end_by_silence = (silence_count    >= MAX_SILENCE_FRAMES);
             bool end_by_timeout = (recording_frames >= MAX_RECORDING_FRAMES);
 
-            if (end_by_silence || end_by_timeout)
+            if ((end_by_silence || end_by_timeout) && !send_triggered)
             {
+                send_triggered = true;   // chặn detect_task trigger lặp lại trước khi send_task kịp đổi state
+
                 if (end_by_timeout)
                     ESP_LOGW(TAG, "Timeout! Kết thúc ghi âm.");
                 else
@@ -665,7 +707,7 @@ static wireguard_ctx_t wg_ctx = {0};
 void wireguard_start(void)
 {
     ESP_LOGI("WG", "Đang đồng bộ thời gian NTP...");
-    esp_sntp_config_t sntp_config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+    esp_sntp_config_t sntp_config = ESP_NETIF_SNTP_DEFAULT_CONFIG("vn.pool.ntp.org");
     esp_netif_sntp_init(&sntp_config);
     
     if (esp_netif_sntp_sync_wait(pdMS_TO_TICKS(15000)) != ESP_OK) {
@@ -686,17 +728,18 @@ void wireguard_start(void)
     wg_config.port = 51824;
     wg_config.persistent_keepalive = 25;
 
-    // QUAN TRỌNG CHO VIỆC TEST:
+    
     // - Nếu ESP32 dùng 4G: Giữ nguyên "171.244.185.125"
     // - Nếu ESP32 dùng chung WiFi công ty với Server: Đổi thành IP LAN (192.168.x.x) của Server.
-    wg_config.endpoint = "171.244.185.125"; 
+     wg_config.endpoint = "171.244.185.125"; 
+     //wg_config.endpoint = "192.168.2.45";
 
     if (esp_wireguard_init(&wg_config, &wg_ctx) != ESP_OK) return;
     if (esp_wireguard_connect(&wg_ctx) != ESP_OK) return;
 
     ESP_LOGI("WG", "Chờ WireGuard hoàn tất Handshake...");
     while (esp_wireguardif_peer_is_up(&wg_ctx) != ESP_OK) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(150));
     }
     ESP_LOGI("WG", "WireGuard link UP! Định tuyến hoàn tất.");
 }
@@ -705,7 +748,10 @@ void wireguard_start(void)
 // MAIN
 // =======================
 void app_main(void)
-{
+{   
+    ESP_LOGI(TAG, "RAM truoc khi cap phat - Internal: %u byte, PSRAM: %u byte",
+         (unsigned int)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+         (unsigned int)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     ESP_LOGI(TAG, "Khởi tạo hệ thống...");
 
     // Ring Buffer 64KB trên PSRAM
@@ -767,8 +813,8 @@ playback_ringbuf = xRingbufferCreateStatic(playback_buf_size, RINGBUF_TYPE_BYTEB
     sys_event_group = xEventGroupCreate();
     xTaskCreatePinnedToCore(feed_task,   "feed_task",   4096*4, NULL, 5, NULL, 0);
     xTaskCreatePinnedToCore(detect_task, "detect_task", 4096*4, NULL, 6, NULL, 0);
-    xTaskCreatePinnedToCore(send_task,   "send",   4096*3, NULL, 4, NULL, 1);
-    xTaskCreatePinnedToCore(play_task, "play_task", 4096*3, NULL, 4, NULL, 1);
+    xTaskCreatePinnedToCore(send_task,   "send",   4096*3, NULL, 4, NULL, 0);
+    xTaskCreatePinnedToCore(play_task, "play_task", 4096*3, NULL, 7, NULL, 0);
     xTaskCreatePinnedToCore(keyboard_task, "keyboard_task", 4096, NULL, 3, NULL, 1);
 
     ESP_LOGI(TAG, "Hệ thống sẵn sàng. Chờ wake word...");
