@@ -274,13 +274,37 @@ if (event_id == WEBSOCKET_EVENT_DATA)
         return;
     }
 
-    // 3. Nhận tín hiệu kết thúc stream từ Server
+
+   // 3. Nhận tín hiệu kết thúc stream / JSON kết quả từ Server (có thể bị chia nhiều frame)
     if (data->data_len > 0 && data->op_code == 0x01)
     {
-        char json_buf[512] = {0};
-        int len = data->data_len < (int)(sizeof(json_buf) - 1)
-                  ? data->data_len : (int)(sizeof(json_buf) - 1);
-        memcpy(json_buf, data->data_ptr, len);
+        static char   text_msg_buf[4096];
+        static size_t text_msg_len = 0;
+
+        // Frame đầu của message (offset 0) -> reset buffer tích lũy
+        if (data->payload_offset == 0) {
+            text_msg_len = 0;
+        }
+
+        // Ráp nối, chặn tràn buffer
+        size_t copy_len = data->data_len;
+        if (text_msg_len + copy_len >= sizeof(text_msg_buf)) {
+            copy_len = sizeof(text_msg_buf) - 1 - text_msg_len;
+            ESP_LOGW(TAG, "Text message vượt quá text_msg_buf, bị cắt bớt!");
+        }
+        if (copy_len > 0) {
+            memcpy(text_msg_buf + text_msg_len, data->data_ptr, copy_len);
+            text_msg_len += copy_len;
+            text_msg_buf[text_msg_len] = '\0';
+        }
+
+        // Chưa nhận đủ toàn bộ message -> chờ frame tiếp theo
+        if (data->payload_offset + data->data_len < data->payload_len) {
+            return;
+        }
+
+        // Đã nhận đủ -> xử lý message hoàn chỉnh
+        char *json_buf = text_msg_buf;
 
         if (strncmp(json_buf, "AUDIO_END", 9) == 0) {
             ESP_LOGI(TAG, "--------------------------------------------------");
@@ -293,23 +317,22 @@ if (event_id == WEBSOCKET_EVENT_DATA)
             return;
         }
 
-            // Nếu không phải AUDIO_END thì xử lý JSON kết quả phản hồi từ Server
-            if (sys_state == STATE_WAITING_RESULT)
-            {
-                ESP_LOGI(TAG, "JSON: %s", json_buf);
+        // Nếu không phải AUDIO_END thì xử lý JSON kết quả phản hồi từ Server
+        if (sys_state == STATE_WAITING_RESULT)
+        {
+            ESP_LOGI(TAG, "JSON (%d byte): %s", (int)text_msg_len, json_buf);
 
-                char speech[256] = {0};
-                char face[32]    = {0};
-                char motor[32]   = {0};
-                json_get_string(json_buf, "speech", speech, sizeof(speech));
-                json_get_string(json_buf, "face",   face,   sizeof(face));
-                json_get_string(json_buf, "motor",  motor,  sizeof(motor));
+            static char speech[1024];
+            static char face[32];
+            static char motor[32];
+            speech[0] = face[0] = motor[0] = '\0';
 
-                ESP_LOGI(TAG, "speech='%s' face='%s' motor='%s'", speech, face, motor);
-                display_update(face, speech);
+            json_get_string(json_buf, "speech", speech, sizeof(speech));
+            json_get_string(json_buf, "face",   face,   sizeof(face));
+            json_get_string(json_buf, "motor",  motor,  sizeof(motor));
 
-                
-            }
+            ESP_LOGI(TAG, "speech='%s' face='%s' motor='%s'", speech, face, motor);
+            display_update(face, speech);
         }
     }
     else if (event_id == WEBSOCKET_EVENT_CONNECTED) {
@@ -319,9 +342,9 @@ if (event_id == WEBSOCKET_EVENT_DATA)
         ESP_LOGW(TAG, "WebSocket mất kết nối.");
         in_audio_stream = false; // Reset cờ nếu mất kết nối
         if (sys_state != STATE_IDLE) sys_state = STATE_IDLE;
+        }
     }
 }
-
 
 void websocket_init(void)
 {
