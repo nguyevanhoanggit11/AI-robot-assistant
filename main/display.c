@@ -408,8 +408,8 @@ void display_init(void)
     ui_speech_label = lv_label_create(ui_cont);
     
     // --- ĐÃ SỬA: Box text giới hạn chu vi + Hiệu ứng tự cuộn (SCROLL) ---
-    lv_obj_set_width(ui_speech_label, 600); 
-    lv_obj_set_height(ui_speech_label, 130); // Đủ chỗ cho 2-3 dòng
+    lv_obj_set_width(ui_speech_label, 650); 
+    lv_obj_set_height(ui_speech_label, 100); // Đủ chỗ cho 2-3 dòng
     lv_label_set_long_mode(ui_speech_label, LV_LABEL_LONG_WRAP); 
     
     lv_obj_set_style_text_font(ui_speech_label, &font_vietnamese_14, LV_PART_MAIN);
@@ -429,10 +429,10 @@ void display_init(void)
 // =======================
 // SUBTITLE QUEUE (hiển thị lời thoại theo từng đoạn, kiểu phụ đề)
 // =======================
-#define MAX_SUBTITLE_SEGMENTS 24
-#define MAX_SUBTITLE_SEG_LEN  220
-#define SUBTITLE_MS_PER_CHAR  40       // ~20 ký tự/giây — chỉnh lại nếu vẫn lệch so với giọng đọc thực tế
-#define SUBTITLE_MIN_MS       1200
+#define MAX_SUBTITLE_SEGMENTS 32
+#define MAX_SUBTITLE_SEG_LEN  120
+#define SUBTITLE_MS_PER_CHAR  85       // ~20 ký tự/giây — chỉnh lại nếu vẫn lệch so với giọng đọc thực tế
+#define SUBTITLE_MIN_MS       1500
 
 static char subtitle_segments[MAX_SUBTITLE_SEGMENTS][MAX_SUBTITLE_SEG_LEN];
 static int  subtitle_segment_count  = 0;
@@ -452,55 +452,61 @@ static int utf8_strlen(const char *s)
 
 // Tách speech thành các đoạn theo dấu câu; nếu đoạn quá dài thì cắt tại
 // khoảng trắng gần nhất (tránh đứt giữa ký tự UTF-8 nhiều byte)
+// Tách speech thành các segment ngắn dựa theo dấu câu hoặc khoảng trắng
 static int split_into_subtitles(const char *speech)
 {
+    if (!speech || strlen(speech) == 0) return 0;
+
     int seg_count = 0;
-    int seg_len   = 0;
-    int last_space_in_seg = -1;
+    const char *start = speech;
+    const char *p = speech;
+    const char *last_space = NULL;
 
-    subtitle_segments[0][0] = '\0';
-
-    for (const char *p = speech; *p != '\0'; p++) {
-        if (seg_count >= MAX_SUBTITLE_SEGMENTS) break;
-
-        if (seg_len < MAX_SUBTITLE_SEG_LEN - 1) {
-            subtitle_segments[seg_count][seg_len++] = *p;
-            subtitle_segments[seg_count][seg_len] = '\0';
+    while (*p != '\0' && seg_count < MAX_SUBTITLE_SEGMENTS) {
+        if (*p == ' ') {
+            last_space = p;
         }
 
-        if (*p == ' ') last_space_in_seg = seg_len - 1;
+        bool is_punct = (*p == '.' || *p == ',' || *p == '!' || *p == '?' || *p == ':' || *p == ';');
+        int current_len = (int)(p - start + 1);
 
-        bool is_punct    = (*p == '.' || *p == ',' || *p == '!' || *p == '?' || *p == ':' || *p == ';');
-        bool force_split = (seg_len >= MAX_SUBTITLE_SEG_LEN - 1);
+        // Ngắt đoạn nếu gặp dấu câu HOẶC độ dài vượt ngưỡng MAX_SUBTITLE_SEG_LEN
+        if (is_punct || current_len >= (MAX_SUBTITLE_SEG_LEN - 1)) {
+            const char *split_point = p;
 
-        if (is_punct || force_split) {
-            const char *rest = NULL;
-            if (force_split && last_space_in_seg > 0) {
-                rest = &subtitle_segments[seg_count][last_space_in_seg + 1];
-                subtitle_segments[seg_count][last_space_in_seg] = '\0';
+            // Nếu ngắt do dài quá mà không có dấu câu, lùi lại khoảng trắng gần nhất để không bị đứt từ
+            if (!is_punct && last_space && last_space > start) {
+                split_point = last_space;
+            } else {
+                split_point = p + 1; // Ngắt sau dấu câu
             }
 
+            int copy_len = (int)(split_point - start);
+            if (copy_len >= MAX_SUBTITLE_SEG_LEN) copy_len = MAX_SUBTITLE_SEG_LEN - 1;
+
+            strncpy(subtitle_segments[seg_count], start, copy_len);
+            subtitle_segments[seg_count][copy_len] = '\0';
             seg_count++;
-            if (seg_count >= MAX_SUBTITLE_SEGMENTS) break;
 
-            seg_len = 0;
-            last_space_in_seg = -1;
-            subtitle_segments[seg_count][0] = '\0';
-
-            if (rest) {
-                seg_len = (int)strlen(rest);
-                if (seg_len >= MAX_SUBTITLE_SEG_LEN) seg_len = MAX_SUBTITLE_SEG_LEN - 1;
-                memcpy(subtitle_segments[seg_count], rest, seg_len);
-                subtitle_segments[seg_count][seg_len] = '\0';
+            // Bỏ qua các khoảng trắng thừa ở đầu đoạn tiếp theo
+            start = split_point;
+            while (*start == ' ' || *start == '.' || *start == ',' || *start == '!' || *start == '?') {
+                if (*start == ' ') start++;
+                else break; 
             }
-
-            // Bỏ qua các khoảng trắng ngay sau dấu câu, tránh đoạn kế tiếp
-            // bắt đầu bằng dấu cách (gây cảm giác hụt chữ đầu dòng)
-            while (*(p + 1) == ' ') p++;
+            p = start;
+            last_space = NULL;
+            continue;
         }
+        p++;
     }
 
-    if (seg_len > 0 && seg_count < MAX_SUBTITLE_SEGMENTS) seg_count++;
+    // Phần dư còn lại cuối cùng
+    if (*start != '\0' && seg_count < MAX_SUBTITLE_SEGMENTS) {
+        strncpy(subtitle_segments[seg_count], start, MAX_SUBTITLE_SEG_LEN - 1);
+        subtitle_segments[seg_count][MAX_SUBTITLE_SEG_LEN - 1] = '\0';
+        seg_count++;
+    }
 
     return seg_count;
 }

@@ -49,11 +49,11 @@ static const char *TAG = "WAKE_WORD";
 // WIFI CONFIG
 // =======================
 //công ty
-// #define WIFI_SSID       "DevBriX"
-// #define WIFI_PASSWORD   "@DevBriX2026$#"
+#define WIFI_SSID       "DevBriX"
+#define WIFI_PASSWORD   "@DevBriX2026$#"
 // hoangwifi
-#define WIFI_SSID       "+++"
-#define WIFI_PASSWORD   "h0916325810"
+// #define WIFI_SSID       "+++"
+// #define WIFI_PASSWORD   "h0916325810"
 // nhà
 //#define WIFI_SSID       "AH2-1009"
 //#define WIFI_PASSWORD   "nhincaichogi"
@@ -458,7 +458,7 @@ void feed_task(void *arg)
             if (r < -32768) r = -32768;
             raw_buffer[i] = (int16_t)r;
 
-            int32_t p = clean * 16;
+            int32_t p = clean * 4;
             if (p >  32767) p =  32767;
             if (p < -32768) p = -32768;
             pcm_buffer[i] = (int16_t)p;
@@ -555,13 +555,13 @@ void detect_task(void *arg)
     int  recording_frames    = 0;
     int  speech_run_count    = 0;
     bool any_speech_detected = false;
-    const int MIN_SPEECH_RUN_FRAMES = 6;    // ~180-200ms non-silence liên tiếp mới tính là thực sự nói
-    const int MAX_SILENCE_FRAMES    = 160;
+    const int MIN_SPEECH_RUN_FRAMES = 10;    // ~180-200ms non-silence liên tiếp mới tính là thực sự nói
+    const int MAX_SILENCE_FRAMES    = 60;
     const int MAX_RECORDING_FRAMES  = 450;
 
     // Cửa sổ trượt để quyết định 1 "nhịp" là im lặng hay không (đa số phiếu, tránh tạp âm 1 frame lẻ)
     #define SILENCE_WINDOW_SIZE      4
-    #define SILENCE_WINDOW_THRESHOLD 2   // >=2/4 frame là silence thì tính nhịp này là im lặng
+    #define SILENCE_WINDOW_THRESHOLD 1   // >=2/4 frame là silence thì tính nhịp này là im lặng
     bool silence_window[SILENCE_WINDOW_SIZE] = { true, true, true, true };
     int  silence_window_idx = 0;
 
@@ -648,7 +648,7 @@ void detect_task(void *arg)
                         ESP_LOGI(TAG, "Im lặng. Kết thúc ghi âm.");
 
                     display_set_thinking();
-
+                    sys_state = STATE_WAITING_RESULT;
                     // QUAN TRỌNG: KHÔNG đổi state ở đây
                     // feed_task vẫn push vào ringbuf trong khi send_task drain
                     // send_task sẽ tự đổi state sau khi gửi END
@@ -667,7 +667,7 @@ void send_task(void *arg)
                             pdTRUE, pdFALSE, portMAX_DELAY);
 
         // Đổi state ở đây — feed_task ngừng push từ lúc này
-        sys_state = STATE_WAITING_RESULT;
+        
 
         if (!esp_websocket_client_is_connected(ws_client)) {
             sys_state = STATE_IDLE;
@@ -804,6 +804,7 @@ playback_ringbuf = xRingbufferCreateStatic(playback_buf_size, RINGBUF_TYPE_BYTEB
 
     afe_config_t *afe_config = afe_config_init("M", models, AFE_TYPE_SR, AFE_MODE_HIGH_PERF);
     if (!afe_config) { ESP_LOGE(TAG, "Lỗi cấu hình AFE."); return; }
+    afe_config->vad_mode = VAD_MODE_4;
     afe_config->aec_init = false;
 
     afe_handle = esp_afe_handle_from_config(afe_config);
