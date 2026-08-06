@@ -1,6 +1,8 @@
 #include "display.h"
 
 #include <string.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -407,8 +409,8 @@ void display_init(void)
     
     // --- ĐÃ SỬA: Box text giới hạn chu vi + Hiệu ứng tự cuộn (SCROLL) ---
     lv_obj_set_width(ui_speech_label, 600); 
-    lv_obj_set_height(ui_speech_label, 80); // Cố định chiều cao
-    lv_label_set_long_mode(ui_speech_label, LV_LABEL_LONG_SCROLL); 
+    lv_obj_set_height(ui_speech_label, 130); // Đủ chỗ cho 2-3 dòng
+    lv_label_set_long_mode(ui_speech_label, LV_LABEL_LONG_WRAP); 
     
     lv_obj_set_style_text_font(ui_speech_label, &font_vietnamese_14, LV_PART_MAIN);
     lv_obj_set_style_text_color(ui_speech_label, lv_color_hex(0xE0E0E0), LV_PART_MAIN);
@@ -425,6 +427,137 @@ void display_init(void)
 }
 
 // =======================
+// SUBTITLE QUEUE (hiển thị lời thoại theo từng đoạn, kiểu phụ đề)
+// =======================
+#define MAX_SUBTITLE_SEGMENTS 24
+#define MAX_SUBTITLE_SEG_LEN  220
+#define SUBTITLE_MS_PER_CHAR  40       // ~20 ký tự/giây — chỉnh lại nếu vẫn lệch so với giọng đọc thực tế
+#define SUBTITLE_MIN_MS       1200
+
+static char subtitle_segments[MAX_SUBTITLE_SEGMENTS][MAX_SUBTITLE_SEG_LEN];
+static int  subtitle_segment_count  = 0;
+static int  subtitle_current_index  = 0;
+static lv_timer_t *subtitle_timer   = NULL;
+
+// Đếm số ký tự UTF-8 (bỏ qua byte tiếp diễn) để ước lượng thời gian đọc
+static int utf8_strlen(const char *s)
+{
+    int count = 0;
+    while (*s) {
+        if (((unsigned char)*s & 0xC0) != 0x80) count++;
+        s++;
+    }
+    return count;
+}
+
+// Tách speech thành các đoạn theo dấu câu; nếu đoạn quá dài thì cắt tại
+// khoảng trắng gần nhất (tránh đứt giữa ký tự UTF-8 nhiều byte)
+static int split_into_subtitles(const char *speech)
+{
+    int seg_count = 0;
+    int seg_len   = 0;
+    int last_space_in_seg = -1;
+
+    subtitle_segments[0][0] = '\0';
+
+    for (const char *p = speech; *p != '\0'; p++) {
+        if (seg_count >= MAX_SUBTITLE_SEGMENTS) break;
+
+        if (seg_len < MAX_SUBTITLE_SEG_LEN - 1) {
+            subtitle_segments[seg_count][seg_len++] = *p;
+            subtitle_segments[seg_count][seg_len] = '\0';
+        }
+
+        if (*p == ' ') last_space_in_seg = seg_len - 1;
+
+        bool is_punct    = (*p == '.' || *p == ',' || *p == '!' || *p == '?' || *p == ':' || *p == ';');
+        bool force_split = (seg_len >= MAX_SUBTITLE_SEG_LEN - 1);
+
+        if (is_punct || force_split) {
+            const char *rest = NULL;
+            if (force_split && last_space_in_seg > 0) {
+                rest = &subtitle_segments[seg_count][last_space_in_seg + 1];
+                subtitle_segments[seg_count][last_space_in_seg] = '\0';
+            }
+
+            seg_count++;
+            if (seg_count >= MAX_SUBTITLE_SEGMENTS) break;
+
+            seg_len = 0;
+            last_space_in_seg = -1;
+            subtitle_segments[seg_count][0] = '\0';
+
+            if (rest) {
+                seg_len = (int)strlen(rest);
+                if (seg_len >= MAX_SUBTITLE_SEG_LEN) seg_len = MAX_SUBTITLE_SEG_LEN - 1;
+                memcpy(subtitle_segments[seg_count], rest, seg_len);
+                subtitle_segments[seg_count][seg_len] = '\0';
+            }
+
+            // Bỏ qua các khoảng trắng ngay sau dấu câu, tránh đoạn kế tiếp
+            // bắt đầu bằng dấu cách (gây cảm giác hụt chữ đầu dòng)
+            while (*(p + 1) == ' ') p++;
+        }
+    }
+
+    if (seg_len > 0 && seg_count < MAX_SUBTITLE_SEGMENTS) seg_count++;
+
+    return seg_count;
+}
+
+static void subtitle_show_segment(int idx)
+{
+    if (idx < 0 || idx >= subtitle_segment_count) return;
+    lv_label_set_text(ui_speech_label, subtitle_segments[idx]);
+}
+
+// Callback timer LVGL: đã chạy sẵn trong context có lock của esp_lv_adapter,
+// KHÔNG tự lock/unlock lại ở đây để tránh deadlock.
+static void subtitle_timer_cb(lv_timer_t *timer)
+{
+    subtitle_current_index++;
+
+    if (subtitle_current_index >= subtitle_segment_count) {
+        lv_timer_del(subtitle_timer);
+        subtitle_timer = NULL;
+        return;
+    }
+
+    subtitle_show_segment(subtitle_current_index);
+
+    int chars = utf8_strlen(subtitle_segments[subtitle_current_index]);
+    uint32_t duration_ms = chars * SUBTITLE_MS_PER_CHAR;
+    if (duration_ms < SUBTITLE_MIN_MS) duration_ms = SUBTITLE_MIN_MS;
+    lv_timer_set_period(subtitle_timer, duration_ms);
+}
+
+// Bắt đầu hiển thị 1 câu nói mới kiểu phụ đề. Gọi từ display_update() (đã lock sẵn).
+static void subtitle_start(const char *speech)
+{
+    if (subtitle_timer != NULL) {
+        lv_timer_del(subtitle_timer);
+        subtitle_timer = NULL;
+    }
+
+    subtitle_segment_count = split_into_subtitles(speech);
+    subtitle_current_index = 0;
+
+    if (subtitle_segment_count == 0) {
+        lv_label_set_text(ui_speech_label, "");
+        return;
+    }
+
+    subtitle_show_segment(0);
+
+    if (subtitle_segment_count > 1) {
+        int chars = utf8_strlen(subtitle_segments[0]);
+        uint32_t duration_ms = chars * SUBTITLE_MS_PER_CHAR;
+        if (duration_ms < SUBTITLE_MIN_MS) duration_ms = SUBTITLE_MIN_MS;
+        subtitle_timer = lv_timer_create(subtitle_timer_cb, duration_ms, NULL);
+    }
+}
+
+// =======================
 // DISPLAY UPDATE
 // =======================
 void display_update(const char *face, const char *speech)
@@ -435,10 +568,36 @@ void display_update(const char *face, const char *speech)
 
     face_eyes_set_emotion(face_eyes_parse_emotion(face), 300);
 
-    lv_label_set_text(ui_speech_label, speech ? speech : "");
-
     lv_label_set_text(ui_state_label, "AI robot assistant");
     lv_obj_set_style_text_color(ui_state_label, lv_color_hex(0x00FF88), LV_PART_MAIN);
+
+    subtitle_start(speech ? speech : "");
+
+    esp_lv_adapter_unlock();
+}
+
+// =======================
+// Reset màn hình về trạng thái chờ ban đầu (gọi khi phát xong 1 lượt hội thoại)
+// =======================
+void display_reset_to_idle(void)
+{
+    if (ui_speech_label == NULL || ui_state_label == NULL) return;
+
+    esp_lv_adapter_lock(-1);
+
+    if (subtitle_timer != NULL) {
+        lv_timer_del(subtitle_timer);
+        subtitle_timer = NULL;
+    }
+    subtitle_segment_count  = 0;
+    subtitle_current_index  = 0;
+
+    face_eyes_set_emotion(FACE_NORMAL, 300);
+
+    lv_label_set_text(ui_state_label, "AI robot assistant");
+    lv_obj_set_style_text_color(ui_state_label, lv_color_hex(0x888888), LV_PART_MAIN);
+
+    lv_label_set_text(ui_speech_label, "Xin chào bạn, tôi là trợ lý AI robot, tôi có thể giúp gì cho bạn?");
 
     esp_lv_adapter_unlock();
 }

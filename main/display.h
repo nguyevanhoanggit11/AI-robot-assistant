@@ -12,3 +12,5 @@ void display_set_listening(void);
 
 // Gọi khi đang chờ server xử lý
 void display_set_thinking(void);
+
+void display_reset_to_idle(void);
