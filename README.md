@@ -14,6 +14,8 @@ Tài liệu này tổng hợp các cấu hình bắt buộc và cách xử lý m
 *   **Cấu hình hệ thống khác:**
     *   Sử dụng bảng phân vùng tùy chỉnh: Chọn **Custom partitions**.
     *   Cấu hình dao động/tần số: Đặt **48 MHz** (48 monesat).
+*   **Cấu hình màn hình:**
+    * Color depth chỉnh về 24: RGB888
 
 ## 2. Các Lỗi Thường Gặp Và Cách Xử Lý
 
