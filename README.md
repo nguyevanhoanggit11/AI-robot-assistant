@@ -1,5 +1,5 @@
 # Hướng dẫn Cấu hình và Xử lý Lỗi (ESP32 / ESP-IDF)
-
+# Trong quá trình làm tuyệt đối không được bấm vào nút chọn lại chip vì sẽ phải set menuconfig lại từ đầu
 Tài liệu này tổng hợp các cấu hình bắt buộc và cách xử lý một số lỗi thường gặp trong quá trình phát triển dự án nhúng với ESP32 trên môi trường ESP-IDF.
 
 ## 1. Các Cấu Hình Bắt Buộc Trong Menuconfig
