@@ -271,7 +271,8 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base,
         // --- Nhận text (JSON kết quả hoặc "AUDIO_END") ---
         if (data->data_len > 0 && data->op_code == 0x01)
         {
-            char json_buf[512] = {0};
+            static char json_buf[4096];
+            memset(json_buf, 0, sizeof(json_buf));
             int len = data->data_len < (int)(sizeof(json_buf) - 1)
                       ? data->data_len : (int)(sizeof(json_buf) - 1);
             memcpy(json_buf, data->data_ptr, len);
@@ -286,9 +287,12 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base,
             {
                 ESP_LOGI(TAG, "JSON: %s", json_buf);
 
-                char speech[256] = {0};
-                char face[32]    = {0};
-                char motor[32]   = {0};
+                static char speech[3072];
+                static char face[32];
+                static char motor[32];
+                memset(speech, 0, sizeof(speech));
+                memset(face,   0, sizeof(face));
+                memset(motor,  0, sizeof(motor));
                 json_get_string(json_buf, "speech", speech, sizeof(speech));
                 json_get_string(json_buf, "face",   face,   sizeof(face));
                 json_get_string(json_buf, "motor",  motor,  sizeof(motor));

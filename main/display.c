@@ -407,7 +407,6 @@ void display_init(void)
     // Speech label 
     ui_speech_label = lv_label_create(ui_cont);
     
-    // --- ĐÃ SỬA: Box text giới hạn chu vi + Hiệu ứng tự cuộn (SCROLL) ---
     lv_obj_set_width(ui_speech_label, 650); 
     lv_obj_set_height(ui_speech_label, 100); // Đủ chỗ cho 2-3 dòng
     lv_label_set_long_mode(ui_speech_label, LV_LABEL_LONG_WRAP); 
@@ -427,19 +426,19 @@ void display_init(void)
 }
 
 // =======================
-// SUBTITLE QUEUE (hiển thị lời thoại theo từng đoạn, kiểu phụ đề)
+// SUBTITLE QUEUE
 // =======================
-#define MAX_SUBTITLE_SEGMENTS 32
-#define MAX_SUBTITLE_SEG_LEN  120
-#define SUBTITLE_MS_PER_CHAR  85       // ~20 ký tự/giây — chỉnh lại nếu vẫn lệch so với giọng đọc thực tế
-#define SUBTITLE_MIN_MS       1500
+#define MAX_SUBTITLE_SEGMENTS 128     
+#define MAX_SUBTITLE_SEG_LEN  100     // Tăng nhẹ lên 120 ký tự để chứa trọn câu ngắn
+#define SUBTITLE_MS_PER_CHAR  62      // Điều chỉnh lại tốc độ chuẩn tiếng Việt (~17 ký tự/giây)
+#define SUBTITLE_MIN_MS       1000    // Thời gian tối thiểu 1.0s
 
 static char subtitle_segments[MAX_SUBTITLE_SEGMENTS][MAX_SUBTITLE_SEG_LEN];
 static int  subtitle_segment_count  = 0;
 static int  subtitle_current_index  = 0;
 static lv_timer_t *subtitle_timer   = NULL;
 
-// Đếm số ký tự UTF-8 (bỏ qua byte tiếp diễn) để ước lượng thời gian đọc
+// Đếm ký tự UTF-8 an toàn
 static int utf8_strlen(const char *s)
 {
     int count = 0;
@@ -450,64 +449,69 @@ static int utf8_strlen(const char *s)
     return count;
 }
 
-// Tách speech thành các đoạn theo dấu câu; nếu đoạn quá dài thì cắt tại
-// khoảng trắng gần nhất (tránh đứt giữa ký tự UTF-8 nhiều byte)
-// Tách speech thành các segment ngắn dựa theo dấu câu hoặc khoảng trắng
+// Tách chuỗi theo TỪ - Sửa triệt để lỗi mất chữ & tràn buffer
 static int split_into_subtitles(const char *speech)
 {
     if (!speech || strlen(speech) == 0) return 0;
 
     int seg_count = 0;
-    const char *start = speech;
-    const char *p = speech;
-    const char *last_space = NULL;
+    size_t speech_len = strlen(speech);
+    char *text_copy = malloc(speech_len + 1);
+    if (!text_copy) {
+        ESP_LOGE(TAG, "Không đủ heap cấp phát text_copy (%d bytes)", (int)speech_len + 1);
+        return 0;
+    }
+    memcpy(text_copy, speech, speech_len + 1);
 
-    while (*p != '\0' && seg_count < MAX_SUBTITLE_SEGMENTS) {
-        if (*p == ' ') {
-            last_space = p;
+    char current_seg[MAX_SUBTITLE_SEG_LEN] = {0};
+    
+    char *saveptr = NULL;
+    char *word = strtok_r(text_copy, " ", &saveptr);
+
+    while (word != NULL && seg_count < MAX_SUBTITLE_SEGMENTS) {
+        int word_len = strlen(word);
+        int curr_len = strlen(current_seg);
+
+        // 1. Nếu thêm từ này bị vượt quá độ dài tối đa -> Cắt segment hiện tại
+        if (curr_len + word_len + 1 >= MAX_SUBTITLE_SEG_LEN) {
+            if (curr_len > 0) {
+                strncpy(subtitle_segments[seg_count], current_seg, MAX_SUBTITLE_SEG_LEN - 1);
+                subtitle_segments[seg_count][MAX_SUBTITLE_SEG_LEN - 1] = '\0';
+                seg_count++;
+                current_seg[0] = '\0'; // Reset
+            }
         }
 
-        bool is_punct = (*p == '.' || *p == ',' || *p == '!' || *p == '?' || *p == ':' || *p == ';');
-        int current_len = (int)(p - start + 1);
-
-        // Ngắt đoạn nếu gặp dấu câu HOẶC độ dài vượt ngưỡng MAX_SUBTITLE_SEG_LEN
-        if (is_punct || current_len >= (MAX_SUBTITLE_SEG_LEN - 1)) {
-            const char *split_point = p;
-
-            // Nếu ngắt do dài quá mà không có dấu câu, lùi lại khoảng trắng gần nhất để không bị đứt từ
-            if (!is_punct && last_space && last_space > start) {
-                split_point = last_space;
-            } else {
-                split_point = p + 1; // Ngắt sau dấu câu
-            }
-
-            int copy_len = (int)(split_point - start);
-            if (copy_len >= MAX_SUBTITLE_SEG_LEN) copy_len = MAX_SUBTITLE_SEG_LEN - 1;
-
-            strncpy(subtitle_segments[seg_count], start, copy_len);
-            subtitle_segments[seg_count][copy_len] = '\0';
-            seg_count++;
-
-            // Bỏ qua các khoảng trắng thừa ở đầu đoạn tiếp theo
-            start = split_point;
-            while (*start == ' ' || *start == '.' || *start == ',' || *start == '!' || *start == '?') {
-                if (*start == ' ') start++;
-                else break; 
-            }
-            p = start;
-            last_space = NULL;
-            continue;
+        // 2. Nối từ vào segment hiện tại (Đảm bảo từ không bị bỏ rơi)
+        if (strlen(current_seg) > 0) {
+            strcat(current_seg, " ");
         }
-        p++;
+        strcat(current_seg, word);
+
+        // 3. Nếu từ kết thúc bằng dấu ngắt câu (Bao gồm cả dấu phẩy) -> Đẩy thành 1 segment
+        int new_len = strlen(current_seg);
+        if (new_len > 0) {
+            char last_char = current_seg[new_len - 1];
+            if (last_char == '.' || last_char == '!' || last_char == '?' || 
+                last_char == ';' || last_char == ':' || last_char == ',') {
+                
+                strncpy(subtitle_segments[seg_count], current_seg, MAX_SUBTITLE_SEG_LEN - 1);
+                subtitle_segments[seg_count][MAX_SUBTITLE_SEG_LEN - 1] = '\0';
+                seg_count++;
+                current_seg[0] = '\0'; // Reset sau khi gán
+            }
+        }
+
+        word = strtok_r(NULL, " ", &saveptr);
     }
 
-    // Phần dư còn lại cuối cùng
-    if (*start != '\0' && seg_count < MAX_SUBTITLE_SEGMENTS) {
-        strncpy(subtitle_segments[seg_count], start, MAX_SUBTITLE_SEG_LEN - 1);
+    // Đưa đoạn còn dư cuối cùng vào danh sách
+    if (strlen(current_seg) > 0 && seg_count < MAX_SUBTITLE_SEGMENTS) {
+        strncpy(subtitle_segments[seg_count], current_seg, MAX_SUBTITLE_SEG_LEN - 1);
         subtitle_segments[seg_count][MAX_SUBTITLE_SEG_LEN - 1] = '\0';
         seg_count++;
     }
-
+    free(text_copy);
     return seg_count;
 }
 
@@ -517,8 +521,28 @@ static void subtitle_show_segment(int idx)
     lv_label_set_text(ui_speech_label, subtitle_segments[idx]);
 }
 
-// Callback timer LVGL: đã chạy sẵn trong context có lock của esp_lv_adapter,
-// KHÔNG tự lock/unlock lại ở đây để tránh deadlock.
+// Tính thời gian hiển thị tinh chỉnh chuẩn xác theo TTS
+static uint32_t calculate_segment_duration(const char *seg)
+{
+    int chars = utf8_strlen(seg);
+    uint32_t duration_ms = chars * SUBTITLE_MS_PER_CHAR;
+
+    if (duration_ms < SUBTITLE_MIN_MS) duration_ms = SUBTITLE_MIN_MS;
+
+    // Bổ sung độ trễ ngắn cho các dấu câu ngắt nhịp
+    int len = strlen(seg);
+    if (len > 0) {
+        char last = seg[len - 1];
+        if (last == ',') {
+            duration_ms += 150; // Giảm xuống 150ms cho dấu phẩy
+        } else if (last == '.' || last == '!' || last == '?') {
+            duration_ms += 300; // Giảm xuống 300ms cho cuối câu
+        }
+    }
+
+    return duration_ms;
+}
+
 static void subtitle_timer_cb(lv_timer_t *timer)
 {
     subtitle_current_index++;
@@ -530,41 +554,12 @@ static void subtitle_timer_cb(lv_timer_t *timer)
     }
 
     subtitle_show_segment(subtitle_current_index);
-
-    int chars = utf8_strlen(subtitle_segments[subtitle_current_index]);
-    uint32_t duration_ms = chars * SUBTITLE_MS_PER_CHAR;
-    if (duration_ms < SUBTITLE_MIN_MS) duration_ms = SUBTITLE_MIN_MS;
+    uint32_t duration_ms = calculate_segment_duration(subtitle_segments[subtitle_current_index]);
     lv_timer_set_period(subtitle_timer, duration_ms);
 }
 
-// Bắt đầu hiển thị 1 câu nói mới kiểu phụ đề. Gọi từ display_update() (đã lock sẵn).
-static void subtitle_start(const char *speech)
-{
-    if (subtitle_timer != NULL) {
-        lv_timer_del(subtitle_timer);
-        subtitle_timer = NULL;
-    }
-
-    subtitle_segment_count = split_into_subtitles(speech);
-    subtitle_current_index = 0;
-
-    if (subtitle_segment_count == 0) {
-        lv_label_set_text(ui_speech_label, "");
-        return;
-    }
-
-    subtitle_show_segment(0);
-
-    if (subtitle_segment_count > 1) {
-        int chars = utf8_strlen(subtitle_segments[0]);
-        uint32_t duration_ms = chars * SUBTITLE_MS_PER_CHAR;
-        if (duration_ms < SUBTITLE_MIN_MS) duration_ms = SUBTITLE_MIN_MS;
-        subtitle_timer = lv_timer_create(subtitle_timer_cb, duration_ms, NULL);
-    }
-}
-
 // =======================
-// DISPLAY UPDATE
+// DISPLAY UPDATE (Sửa lại delay khởi động)
 // =======================
 void display_update(const char *face, const char *speech)
 {
@@ -577,7 +572,23 @@ void display_update(const char *face, const char *speech)
     lv_label_set_text(ui_state_label, "AI robot assistant");
     lv_obj_set_style_text_color(ui_state_label, lv_color_hex(0x00FF88), LV_PART_MAIN);
 
-    subtitle_start(speech ? speech : "");
+    if (subtitle_timer != NULL) {
+        lv_timer_del(subtitle_timer);
+        subtitle_timer = NULL;
+    }
+
+    subtitle_segment_count = split_into_subtitles(speech ? speech : "");
+    subtitle_current_index = 0;
+
+    if (subtitle_segment_count > 0) {
+        subtitle_show_segment(0);
+
+        if (subtitle_segment_count > 1) {
+            // Giảm độ trễ buffer loa ban đầu xuống còn ~150ms để bắt kịp voice ngay khi phát
+            uint32_t first_duration = calculate_segment_duration(subtitle_segments[0]) + 150;
+            subtitle_timer = lv_timer_create(subtitle_timer_cb, first_duration, NULL);
+        }
+    }
 
     esp_lv_adapter_unlock();
 }
