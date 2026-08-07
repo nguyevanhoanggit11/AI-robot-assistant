@@ -398,7 +398,6 @@ void display_init(void)
     lv_obj_set_style_text_color(ui_state_label, lv_color_hex(0x888888), LV_PART_MAIN);
     lv_label_set_text(ui_state_label, "AI robot assistant");
     
-    // --- ĐÃ SỬA: Đưa X về 0, giảm Y xuống 5 để không đè lên dấu "?" ---
     lv_obj_align(ui_state_label, LV_ALIGN_TOP_MID, 0, 5); 
 
     // Mắt
@@ -430,7 +429,7 @@ void display_init(void)
 // =======================
 #define MAX_SUBTITLE_SEGMENTS 128     
 #define MAX_SUBTITLE_SEG_LEN  100     // Tăng nhẹ lên 120 ký tự để chứa trọn câu ngắn
-#define SUBTITLE_MS_PER_CHAR  62      // Điều chỉnh lại tốc độ chuẩn tiếng Việt (~17 ký tự/giây)
+#define SUBTITLE_MS_PER_CHAR  69    // Điều chỉnh lại tốc độ chuẩn tiếng Việt (~17 ký tự/giây)
 #define SUBTITLE_MIN_MS       1000    // Thời gian tối thiểu 1.0s
 
 static char subtitle_segments[MAX_SUBTITLE_SEGMENTS][MAX_SUBTITLE_SEG_LEN];

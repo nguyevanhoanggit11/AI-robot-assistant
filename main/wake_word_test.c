@@ -88,7 +88,7 @@ static EventGroupHandle_t wifi_event_group;
 #define WIFI_FAIL_BIT      BIT1
 
 i2s_chan_handle_t rx_chan           = NULL;
-i2s_chan_handle_t tx_chan = NULL;              // thêm dòng này, cạnh rx_chan
+i2s_chan_handle_t tx_chan = NULL;             
 RingbufHandle_t   playback_ringbuf = NULL;     // buffer chứa PCM chờ phát ra loa
 static bool       receiving_audio = false;     // đánh dấu đang nhận 1 frame binary audio
 static volatile bool new_stream_pending = false;   // đánh dấu vừa bắt đầu 1 đoạn audio mới, cần đệm lại trước khi phát
@@ -356,7 +356,7 @@ static void pa_enable(void)
     };
     gpio_config(&io_conf);
     gpio_set_level(GPIO_OUTPUT_PA, 1);
-    ESP_LOGI(TAG, "PA (ampli loa) đã bật");
+    ESP_LOGI(TAG, "PA  đã bật");
 }
 // =======================
 // I2S + ES8311 (mic onboard + loa)
@@ -408,7 +408,7 @@ void i2s_init(void)
     ESP_ERROR_CHECK(es8311_init(es_handle, &es_clk, ES8311_RESOLUTION_16, ES8311_RESOLUTION_16));
     ESP_ERROR_CHECK(es8311_sample_frequency_config(es_handle, EXAMPLE_SAMPLE_RATE * EXAMPLE_MCLK_MULTIPLE, EXAMPLE_SAMPLE_RATE));
     ESP_ERROR_CHECK(es8311_microphone_config(es_handle, false));
-    // sau dòng es8311_microphone_config(es_handle, false);
+    
     ESP_ERROR_CHECK(es8311_microphone_gain_set(es_handle, ES8311_MIC_GAIN_30DB));
     ESP_ERROR_CHECK(es8311_voice_volume_set(es_handle,80, NULL));   
 
@@ -510,7 +510,7 @@ void play_task(void *arg)
         // --- Trạng thái đệm: chờ ringbuf tích đủ PLAYBACK_PRIME_BYTES rồi mới phát ---
         if (priming) {
             UBaseType_t free_size = xRingbufferGetCurFreeSize(playback_ringbuf);
-            UBaseType_t used_size = (128 * 1024) - free_size;   // 128*1024 = kich thuoc playback_ringbuf, khai bao trong app_main
+            UBaseType_t used_size = (128 * 1024) - free_size;   
 
             if (used_size >= PLAYBACK_PRIME_BYTES) {
                 priming = false;
