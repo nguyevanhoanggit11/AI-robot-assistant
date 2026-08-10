@@ -48,24 +48,24 @@ static const char *TAG = "WAKE_WORD";
 // =======================
 // WIFI CONFIG
 // =======================
-//công ty
-#define WIFI_SSID       "DevBriX"
-#define WIFI_PASSWORD   "@DevBriX2026$#"
+// //công ty
+//  #define WIFI_SSID       "DevBriX"
+//  #define WIFI_PASSWORD   "@DevBriX2026$#"
 // hoangwifi
-// #define WIFI_SSID       "+++"
-// #define WIFI_PASSWORD   "h0916325810"
-// nhà
-//#define WIFI_SSID       "AH2-1009"
-//#define WIFI_PASSWORD   "nhincaichogi"
+#define WIFI_SSID       "+++"
+#define WIFI_PASSWORD   "h0916325810"
+//nhà
+// #define WIFI_SSID       "AH2-1009"
+// #define WIFI_PASSWORD   "nhincaichogi"
 #define EXAMPLE_ESP_MAXIMUM_RETRY 5
 
 // =======================
 // WEBSOCKET CONFIG
 // =======================
 //công ty 
-// #define WEBSOCKET_URI   "ws://192.168.2.214:8765" 
+//  #define WEBSOCKET_URI   "ws://192.168.2.214:8765" 
 // nhà
-#define WEBSOCKET_URI   "ws://10.10.10.1:8765"
+ #define WEBSOCKET_URI   "ws://10.10.10.1:8765"
 #define WS_TIMEOUT_MS   5000
 static EventGroupHandle_t sys_event_group = NULL;
 typedef enum {
@@ -94,6 +94,7 @@ static bool       receiving_audio = false;     // đánh dấu đang nhận 1 fr
 static volatile bool new_stream_pending = false;   // đánh dấu vừa bắt đầu 1 đoạn audio mới, cần đệm lại trước khi phát
 
 #define PLAYBACK_PRIME_BYTES   12800   // ~400ms audio ở 16kHz, mono, 16-bit (16000 mau/giay * 2 byte/mau * 0.4 giay)
+#define PLAYBACK_RINGBUF_SIZE  (48 * 1024)  // PHẢI khớp với playback_buf_size cấp phát trong app_main()
 #define RESUME_DELAY_MS        2000
 static es8311_handle_t es_handle    = NULL;
 const esp_afe_sr_iface_t *afe_handle = NULL;
@@ -509,15 +510,33 @@ void play_task(void *arg)
 
         // --- Trạng thái đệm: chờ ringbuf tích đủ PLAYBACK_PRIME_BYTES rồi mới phát ---
         if (priming) {
-            UBaseType_t free_size = xRingbufferGetCurFreeSize(playback_ringbuf);
-            UBaseType_t used_size = (128 * 1024) - free_size;   
-
-            if (used_size >= PLAYBACK_PRIME_BYTES) {
+            // Nếu server đã báo AUDIO_END trong khi đang đệm → thoát priming,
+            // phát hết phần dữ liệu còn lại trong ringbuf thay vì chờ mãi.
+            if (audio_stream_ended) {
                 priming = false;
-                ESP_LOGI(TAG, "Da dem du (%u byte) - bat dau phat.", (unsigned int)used_size);
+                UBaseType_t free_size = xRingbufferGetCurFreeSize(playback_ringbuf);
+                UBaseType_t used_size = PLAYBACK_RINGBUF_SIZE - free_size;
+                ESP_LOGW(TAG, "AUDIO_END trong khi dang dem (%u byte) - phat phan con lai.", (unsigned int)used_size);
+                // Nếu ringbuf trống hoàn toàn thì xử lý kết thúc luôn
+                if (used_size == 0) {
+                    audio_stream_ended = false;
+                    ESP_LOGI(TAG, "Phat xong TTS. Cho %d ms roi quay lai ghi am...", RESUME_DELAY_MS);
+                    vTaskDelay(pdMS_TO_TICKS(RESUME_DELAY_MS));
+                    resume_conversation_flag = true;
+                    continue;
+                }
+                // Nếu còn data → thoát priming, vòng lặp bên dưới sẽ phát hết rồi xử lý AUDIO_END
             } else {
-                vTaskDelay(pdMS_TO_TICKS(10));
-                continue;   // chưa đủ đệm, chưa lấy dữ liệu ra phát
+                UBaseType_t free_size = xRingbufferGetCurFreeSize(playback_ringbuf);
+                UBaseType_t used_size = PLAYBACK_RINGBUF_SIZE - free_size;
+
+                if (used_size >= PLAYBACK_PRIME_BYTES) {
+                    priming = false;
+                    ESP_LOGI(TAG, "Da dem du (%u byte) - bat dau phat.", (unsigned int)used_size);
+                } else {
+                    vTaskDelay(pdMS_TO_TICKS(10));
+                    continue;   // chưa đủ đệm, chưa lấy dữ liệu ra phát
+                }
             }
         }
 
@@ -778,7 +797,7 @@ audio_ringbuf = xRingbufferCreateStatic(ringbuf_size, RINGBUF_TYPE_BYTEBUF,
 
 // playback_ringbuf (I2S output): chuyen sang internal RAM de tranh PSRAM contention voi DSI display
 // giam kich thuoc xuong 48KB (~1.5 giay audio o 16kHz mono 16-bit), du cho buffer priming 400ms + du phong
-size_t playback_buf_size = 48 * 1024;
+size_t playback_buf_size = PLAYBACK_RINGBUF_SIZE;
 StaticRingbuffer_t *playback_struct  = heap_caps_malloc(sizeof(StaticRingbuffer_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
 uint8_t            *playback_storage = heap_caps_malloc(playback_buf_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
 if (!playback_struct || !playback_storage) {
