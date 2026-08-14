@@ -4,26 +4,25 @@
 #include <stdlib.h>
 #include "esp_random.h"
 
-// Màu nền màn hình (phải khớp với màu set cho screen trong display.c)
-// Dùng để "mask" (che) một nửa hình tròn, tạo hiệu ứng bán nguyệt.
+// Màu nền màn hình dùng làm lớp che (mask) tạo hiệu ứng mắt bán nguyệt (Happy/Sad)
 #define FACE_BG_COLOR_HEX 0x1A1A2E
 
 typedef enum {
-    MASK_NONE = 0,   // không che -> hình tròn đầy đủ
-    MASK_TOP,        // che nửa TRÊN -> còn lại nửa DƯỚI tròn, bụng cong xuống (SAD)
-    MASK_BOTTOM,     // che nửa DƯỚI -> còn lại nửa TRÊN tròn, bụng cong lên (HAPPY)
+    MASK_NONE = 0,   // Không che (hình tròn trọn vẹn)
+    MASK_TOP,        // Che nửa trên (tạo hình bán nguyệt cong xuống - Sad)
+    MASK_BOTTOM,     // Che nửa dưới (tạo hình bán nguyệt cong lên - Happy)
 } mask_mode_t;
 
-// =======================
-// Bảng tham số hình học từng biểu cảm
-// =======================
+// =============================================================================
+// Bảng tham số hình học và màu sắc cho từng biểu cảm
+// =============================================================================
 typedef struct {
-    int16_t     eye_d;         // đường kính hình tròn gốc của mắt (px)
-    int16_t     eye_y;         // offset dọc của cả cụm mắt so với tâm container
-    int16_t     gap_x;         // khoảng cách từ tâm mặt tới tâm mỗi mắt
-    mask_mode_t mask;          // che nửa nào để tạo hình bán nguyệt (happy/sad)
-    bool        show_qmark;    // hiện dấu "?" cạnh mắt phải (chỉ dùng cho listening)
-    lv_color_t  color;
+    int16_t     eye_d;         // Đường kính mắt (px)
+    int16_t     eye_y;         // Độ lệch trục Y so với tâm container
+    int16_t     gap_x;         // Khoảng cách từ tâm đến mỗi mắt
+    mask_mode_t mask;          // Kiểu che bán nguyệt
+    bool        show_qmark;    // Hiển thị biểu tượng "?" (cho trạng thái listening)
+    lv_color_t  color;         // Màu sắc của mắt
 } emotion_preset_t;
 
 static const emotion_preset_t k_presets[FACE_EMOTION_COUNT] = {
@@ -34,12 +33,12 @@ static const emotion_preset_t k_presets[FACE_EMOTION_COUNT] = {
     },
     [FACE_HAPPY] = {
         .eye_d = 92, .eye_y = -6, .gap_x = 65,
-        .mask = MASK_BOTTOM, .show_qmark = false,   // bụng cong lên
+        .mask = MASK_BOTTOM, .show_qmark = false,
         .color = LV_COLOR_MAKE(0xFF, 0xD7, 0x00),
     },
     [FACE_SAD] = {
         .eye_d = 78, .eye_y = 12, .gap_x = 62,
-        .mask = MASK_TOP, .show_qmark = false,      // bụng cong xuống
+        .mask = MASK_TOP, .show_qmark = false,
         .color = LV_COLOR_MAKE(0x66, 0x99, 0xFF),
     },
     [FACE_ANGRY] = {
@@ -92,9 +91,9 @@ static void animate_prop(lv_obj_t *obj, lv_anim_exec_xcb_t cb, int32_t from, int
     lv_anim_start(&a);
 }
 
-// =======================
-// Đặt/ẩn khối "mask" để tạo hình bán nguyệt cho 1 mắt
-// =======================
+// =============================================================================
+// Áp dụng mask tạo hình bán nguyệt cho mắt
+// =============================================================================
 static void apply_mask(lv_obj_t *mask, lv_obj_t *shape, mask_mode_t mode, int32_t d, uint32_t transition_ms)
 {
     if (mode == MASK_NONE) {
@@ -102,15 +101,8 @@ static void apply_mask(lv_obj_t *mask, lv_obj_t *shape, mask_mode_t mode, int32_
         return;
     }
 
-    // Đặt lại kích thước mask luôn là hình tròn to hơn mắt một chút để che viền
     lv_obj_set_size(mask, d + 10, d + 10);
-
-    // Tính toán offset. 
-    // Chia cho 2 (d / 2) sẽ tạo hình lưỡi liềm khá nét. 
-    // Nếu muốn lưỡi liềm dày hơn, giảm mẫu số (ví dụ: d / 1.5). 
-    // Nếu muốn mỏng hơn, tăng mẫu số (ví dụ: d / 2.5).
     int32_t offset_y = (mode == MASK_BOTTOM) ? (d / 2) : -(d / 2);
-    
     lv_obj_align_to(mask, shape, LV_ALIGN_CENTER, 0, offset_y);
 
     animate_prop(mask, anim_set_opa_cb, lv_obj_get_style_opa(mask, 0), LV_OPA_COVER, transition_ms);
@@ -219,20 +211,18 @@ void face_eyes_set_emotion(face_emotion_t emotion, uint32_t transition_ms)
     lv_obj_set_style_bg_color(s_left_shape,  p->color, 0);
     lv_obj_set_style_bg_color(s_right_shape, p->color, 0);
 
-    // BỔ SUNG: Chuyển đổi trạng thái hiển thị giữa Hình Tròn Đặc và Hình Vòng Cung (Dấu Ngoặc Đơn)
     if (p->mask != MASK_NONE) {
-        // Khi biểu cảm yêu cầu hình bán nguyệt (HAPPY / SAD) -> Chuyển thành hình nhẫn rỗng
+        // Chuyển sang dạng viền rỗng kết hợp mask cho các biểu cảm cung cong (Happy/Sad)
         lv_obj_set_style_bg_opa(s_left_shape, LV_OPA_TRANSP, 0);
         lv_obj_set_style_bg_opa(s_right_shape, LV_OPA_TRANSP, 0);
         
         lv_obj_set_style_border_color(s_left_shape, p->color, 0);
         lv_obj_set_style_border_color(s_right_shape, p->color, 0);
         
-        // Thay đổi con số 12 này để tăng/giảm độ dày nét vẽ của dấu ngoặc đơn
         lv_obj_set_style_border_width(s_left_shape, 12, 0);
         lv_obj_set_style_border_width(s_right_shape, 12, 0);
     } else {
-        // Khi quay lại các biểu cảm dạng tròn (NORMAL, ANGRY...) -> Phục hồi thành hình tròn đặc
+        // Phục hồi hình tròn đặc cho các biểu cảm tiêu chuẩn (Normal, Angry, ...)
         lv_obj_set_style_bg_opa(s_left_shape, LV_OPA_COVER, 0);
         lv_obj_set_style_bg_opa(s_right_shape, LV_OPA_COVER, 0);
         
@@ -270,13 +260,10 @@ static lv_obj_t *create_eye_group(lv_obj_t *parent, int16_t gap_x, int16_t eye_y
     lv_obj_set_style_bg_color(shape, color, 0);
     lv_obj_set_style_bg_opa(shape, LV_OPA_COVER, 0);
     lv_obj_align(shape, LV_ALIGN_CENTER, 0, 0);
-lv_obj_t *mask = lv_obj_create(grp);
+    lv_obj_t *mask = lv_obj_create(grp);
     lv_obj_remove_style_all(mask);
-    
-    // Đặt kích thước ban đầu là hình vuông để bo tròn thành hình tròn
     lv_obj_set_size(mask, eye_d + 10, eye_d + 10); 
     lv_obj_set_style_radius(mask, LV_RADIUS_CIRCLE, 0);
-    
     lv_obj_set_style_bg_color(mask, lv_color_hex(FACE_BG_COLOR_HEX), 0);
     lv_obj_set_style_bg_opa(mask, LV_OPA_COVER, 0);
     lv_obj_set_style_opa(mask, LV_OPA_TRANSP, 0); 

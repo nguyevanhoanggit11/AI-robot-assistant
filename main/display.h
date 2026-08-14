@@ -1,16 +1,28 @@
 #pragma once
 
-// Khởi tạo màn hình
+/**
+ * @brief Khởi tạo phần cứng màn hình và giao diện LVGL
+ */
 void display_init(void);
 
-// Cập nhật sau khi nhận JSON từ server
-// face: "happy", "sad", "angry", "surprised", "neutral"
+/**
+ * @brief Cập nhật trạng thái biểu cảm và phụ đề từ kết quả phản hồi của server
+ * @param face Chuỗi biểu cảm ("happy", "sad", "angry", "listening", "thinking")
+ * @param speech Nội dung phụ đề thoại
+ */
 void display_update(const char *face, const char *speech);
 
-// Gọi khi wake word detected
+/**
+ * @brief Chuyển giao diện sang trạng thái đang lắng nghe (Wake word detected)
+ */
 void display_set_listening(void);
 
-// Gọi khi đang chờ server xử lý
+/**
+ * @brief Chuyển giao diện sang trạng thái đang xử lý suy nghĩ
+ */
 void display_set_thinking(void);
 
+/**
+ * @brief Đặt lại giao diện về trạng thái chờ mặc định (Idle)
+ */
 void display_reset_to_idle(void);

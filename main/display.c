@@ -23,18 +23,15 @@
 
 static const char *TAG = "DISPLAY";
 
-// =======================
-// Waveshare 4.3" DSI Cap Touch rev2.2 (cầu TC358762 + ATTINY PMIC @0x45)
-// Ghép qua cáp FFC vào ESP32-P4-Module-DEV-KIT
-// =======================
+// =============================================================================
+// Waveshare 4.3" DSI Panel Configuration (TC358762 bridge + ATTINY PMIC @0x45)
+// =============================================================================
 #define LCD_H_RES              800
 #define LCD_V_RES              480
 #define LCD_DPI_CLK_MHZ        26
 #define LCD_HSW                1
-// --- ĐÃ SỬA: Điều chỉnh Timings phần cứng để căn giữa màn hình ---
-#define LCD_HBP                26   // Giảm từ 46 xuống 26 để dịch màn hình sang trái
-#define LCD_HFP                230  // Tăng từ 210 lên 230 để giữ nguyên H_Total
-// -----------------------------------------------------------------
+#define LCD_HBP                26
+#define LCD_HFP                230
 #define LCD_VSW                3
 #define LCD_VBP                29
 #define LCD_VFP                13
@@ -340,9 +337,7 @@ void display_init(void)
 {
     ESP_LOGI(TAG, "Khởi tạo màn hình Waveshare 4.3\" DSI...");
 
-    // --- ĐÃ SỬA: Ghim tác vụ vẽ LVGL vào Core 0 ---
     esp_lv_adapter_config_t lv_cfg = ESP_LV_ADAPTER_DEFAULT_CONFIG();
-    //lv_cfg.task_affinity = 0; // Cực kỳ quan trọng để chống xung đột với âm thanh ở Core 1
     ESP_ERROR_CHECK(esp_lv_adapter_init(&lv_cfg));
 
     ESP_ERROR_CHECK(lcd_hw_init());
@@ -385,7 +380,7 @@ void display_init(void)
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 
-    // MASTER CONTAINER1
+    // Master container
     lv_obj_t *ui_cont = lv_obj_create(screen);
     lv_obj_remove_style_all(ui_cont); 
     lv_obj_set_size(ui_cont, LCD_H_RES, LCD_V_RES); 
@@ -400,14 +395,14 @@ void display_init(void)
     
     lv_obj_align(ui_state_label, LV_ALIGN_TOP_MID, 0, 5); 
 
-    // Mắt
+    // Eyes component
     face_eyes_create(ui_cont);
 
     // Speech label 
     ui_speech_label = lv_label_create(ui_cont);
     
     lv_obj_set_width(ui_speech_label, 650); 
-    lv_obj_set_height(ui_speech_label, 100); // Đủ chỗ cho 2-3 dòng
+    lv_obj_set_height(ui_speech_label, 100);
     lv_label_set_long_mode(ui_speech_label, LV_LABEL_LONG_WRAP); 
     
     lv_obj_set_style_text_font(ui_speech_label, &font_vietnamese_14, LV_PART_MAIN);
@@ -415,7 +410,6 @@ void display_init(void)
     lv_obj_set_style_text_align(ui_speech_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     lv_label_set_text(ui_speech_label, "Xin chào bạn, tôi là trợ lý AI robot, tôi có thể giúp gì cho bạn?");
     
-    // Đưa X về 0 (vì phần cứng đã tự căn giữa), đẩy Y xuống dưới một chút
     lv_obj_align(ui_speech_label, LV_ALIGN_CENTER, 0, 120); 
 
     lv_refr_now(lvgl_display);
@@ -424,13 +418,13 @@ void display_init(void)
     ESP_LOGI(TAG, "Màn hình sẵn sàng.");
 }
 
-// =======================
-// SUBTITLE QUEUE
-// =======================
+// =============================================================================
+// Cấu hình hàng đợi phụ đề (Subtitle Queue)
+// =============================================================================
 #define MAX_SUBTITLE_SEGMENTS 128     
-#define MAX_SUBTITLE_SEG_LEN  100     // Tăng nhẹ lên 120 ký tự để chứa trọn câu ngắn
-#define SUBTITLE_MS_PER_CHAR  69    // Điều chỉnh lại tốc độ chuẩn tiếng Việt (~17 ký tự/giây)
-#define SUBTITLE_MIN_MS       1000    // Thời gian tối thiểu 1.0s
+#define MAX_SUBTITLE_SEG_LEN  100     
+#define SUBTITLE_MS_PER_CHAR  69      // Tốc độ hiển thị (~17 ký tự/giây)
+#define SUBTITLE_MIN_MS       1000    // Thời gian hiển thị tối thiểu mỗi câu (1.0s)
 
 static char subtitle_segments[MAX_SUBTITLE_SEGMENTS][MAX_SUBTITLE_SEG_LEN];
 static int  subtitle_segment_count  = 0;
@@ -448,7 +442,7 @@ static int utf8_strlen(const char *s)
     return count;
 }
 
-// Tách chuỗi theo TỪ - Sửa triệt để lỗi mất chữ & tràn buffer
+// Phân tách văn bản thành các phân đoạn phụ đề theo từ và dấu ngắt câu
 static int split_into_subtitles(const char *speech)
 {
     if (!speech || strlen(speech) == 0) return 0;
@@ -471,23 +465,20 @@ static int split_into_subtitles(const char *speech)
         int word_len = strlen(word);
         int curr_len = strlen(current_seg);
 
-        // 1. Nếu thêm từ này bị vượt quá độ dài tối đa -> Cắt segment hiện tại
         if (curr_len + word_len + 1 >= MAX_SUBTITLE_SEG_LEN) {
             if (curr_len > 0) {
                 strncpy(subtitle_segments[seg_count], current_seg, MAX_SUBTITLE_SEG_LEN - 1);
                 subtitle_segments[seg_count][MAX_SUBTITLE_SEG_LEN - 1] = '\0';
                 seg_count++;
-                current_seg[0] = '\0'; // Reset
+                current_seg[0] = '\0';
             }
         }
 
-        // 2. Nối từ vào segment hiện tại (Đảm bảo từ không bị bỏ rơi)
         if (strlen(current_seg) > 0) {
             strcat(current_seg, " ");
         }
         strcat(current_seg, word);
 
-        // 3. Nếu từ kết thúc bằng dấu ngắt câu (Bao gồm cả dấu phẩy) -> Đẩy thành 1 segment
         int new_len = strlen(current_seg);
         if (new_len > 0) {
             char last_char = current_seg[new_len - 1];
@@ -497,14 +488,13 @@ static int split_into_subtitles(const char *speech)
                 strncpy(subtitle_segments[seg_count], current_seg, MAX_SUBTITLE_SEG_LEN - 1);
                 subtitle_segments[seg_count][MAX_SUBTITLE_SEG_LEN - 1] = '\0';
                 seg_count++;
-                current_seg[0] = '\0'; // Reset sau khi gán
+                current_seg[0] = '\0';
             }
         }
 
         word = strtok_r(NULL, " ", &saveptr);
     }
 
-    // Đưa đoạn còn dư cuối cùng vào danh sách
     if (strlen(current_seg) > 0 && seg_count < MAX_SUBTITLE_SEGMENTS) {
         strncpy(subtitle_segments[seg_count], current_seg, MAX_SUBTITLE_SEG_LEN - 1);
         subtitle_segments[seg_count][MAX_SUBTITLE_SEG_LEN - 1] = '\0';
@@ -520,7 +510,7 @@ static void subtitle_show_segment(int idx)
     lv_label_set_text(ui_speech_label, subtitle_segments[idx]);
 }
 
-// Tính thời gian hiển thị tinh chỉnh chuẩn xác theo TTS
+// Tính thời gian hiển thị phù hợp với độ dài câu và dấu câu
 static uint32_t calculate_segment_duration(const char *seg)
 {
     int chars = utf8_strlen(seg);
@@ -528,14 +518,13 @@ static uint32_t calculate_segment_duration(const char *seg)
 
     if (duration_ms < SUBTITLE_MIN_MS) duration_ms = SUBTITLE_MIN_MS;
 
-    // Bổ sung độ trễ ngắn cho các dấu câu ngắt nhịp
     int len = strlen(seg);
     if (len > 0) {
         char last = seg[len - 1];
         if (last == ',') {
-            duration_ms += 150; // Giảm xuống 150ms cho dấu phẩy
+            duration_ms += 150;
         } else if (last == '.' || last == '!' || last == '?') {
-            duration_ms += 300; // Giảm xuống 300ms cho cuối câu
+            duration_ms += 300;
         }
     }
 
@@ -557,9 +546,9 @@ static void subtitle_timer_cb(lv_timer_t *timer)
     lv_timer_set_period(subtitle_timer, duration_ms);
 }
 
-// =======================
-// DISPLAY UPDATE (Sửa lại delay khởi động)
-// =======================
+// =============================================================================
+// Cập nhật giao diện khi có phản hồi mới từ server
+// =============================================================================
 void display_update(const char *face, const char *speech)
 {
     if (ui_speech_label == NULL) return;
@@ -583,7 +572,6 @@ void display_update(const char *face, const char *speech)
         subtitle_show_segment(0);
 
         if (subtitle_segment_count > 1) {
-            // Giảm độ trễ buffer loa ban đầu xuống còn ~150ms để bắt kịp voice ngay khi phát
             uint32_t first_duration = calculate_segment_duration(subtitle_segments[0]) + 150;
             subtitle_timer = lv_timer_create(subtitle_timer_cb, first_duration, NULL);
         }
