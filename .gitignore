@@ -9,4 +9,6 @@ sdkconfig.backup
 .env
 *.env
 __pycache__/
-*.pyc
+*.pyc
+README.md
+
