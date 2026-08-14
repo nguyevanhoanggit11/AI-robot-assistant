@@ -6,3 +6,7 @@ sdkconfig.backup
 
 .vscode/
 .clangd/
+.env
+*.env
+__pycache__/
+*.pyc

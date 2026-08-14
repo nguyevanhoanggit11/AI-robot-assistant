@@ -1,0 +1,20 @@
+idf_component_register(
+    SRCS "screens/ui_screen__screen1.c"
+         "ui.c"
+         "components/ui_comp_hook.c"
+         "ui_helpers.c"
+         "ui_siri_anim.c"
+         "images/ui_img_shadow_png.c"
+         "images/ui_img_iconbg_png.c"
+         "images/ui_img_pinktop_png.c"
+         "images/ui_img_pinkleft_png.c"
+         "images/ui_img_bluemiddle_png.c"
+         "images/ui_img_blueright_png.c"
+         "images/ui_img_intersect_png.c"
+         "images/ui_img_greenleft1_png.c"
+         "images/ui_img_greenleft_png.c"
+         "images/ui_img_bottompink_png.c"
+         "images/ui_img_highlight_png.c"
+    INCLUDE_DIRS "." "components"
+    REQUIRES lvgl
+)

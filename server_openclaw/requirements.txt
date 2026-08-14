@@ -1,0 +1,9 @@
+websockets
+requests
+numpy
+pydub
+static-ffmpeg
+python-dotenv
+vieneu
+scipy
+sherpa-onnx
